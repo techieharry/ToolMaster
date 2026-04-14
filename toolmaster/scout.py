@@ -562,7 +562,10 @@ def _distribute_proposals(proposals: list[dict]):
     if not proposals:
         return
 
-    claude_dir = Path.home() / "Documents" / "claude"
+    claude_dir = Path(os.environ.get("CLAUDE_DIR", "C:/Claude"))
+    if not claude_dir.is_dir():
+        _log(f"CLAUDE_DIR does not exist: {claude_dir} — skipping distribution")
+        return
     for d in claude_dir.iterdir():
         if not d.is_dir() or d.name == "ToolMaster":
             continue
@@ -798,6 +801,9 @@ def _save_state_data(state: dict):
 def _log(msg: str):
     SCOUT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(SCOUT_LOG_FILE, "a") as f:
+    with open(SCOUT_LOG_FILE, "a", encoding="utf-8", errors="replace") as f:
         f.write(f"[{ts}] {msg}\n")
-    print(f"  [SCOUT] {msg}")
+    try:
+        print(f"  [SCOUT] {msg}")
+    except UnicodeEncodeError:
+        print(f"  [SCOUT] {msg.encode('ascii', 'replace').decode('ascii')}")
