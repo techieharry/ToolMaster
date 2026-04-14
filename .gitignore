@@ -1,0 +1,54 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.key
+*_secret*
+*_token*
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Local runtime state (watcher, store, recordings, proposals)
+# These live at ~/.toolmaster/ by default, but guard against anyone
+# symlinking or relocating them into the repo tree.
+.toolmaster/
+watcher.pid
+watcher.log
+scout.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Test scratch
+.coverage
+htmlcov/
+.tox/

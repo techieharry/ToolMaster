@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toolmaster"
+version = "0.1.0"
+description = "Content-addressed skill registry and loadout system"
+requires-python = ">=3.10"
+
+[project.scripts]
+toolmaster = "toolmaster.cli:main"

@@ -1,0 +1,300 @@
+"""V1 survival tests — the roadmap validation gates.
+
+Covers the four roadmap "validate before moving on" checkpoints:
+  Step 1: pin -> resolve round-trip + prefix hash lookup + hash stability
+  Step 2: loadout create + priority order + diff
+  Step 3: recording create + list + filter
+  Step 4: compare_loadouts heuristic path produces a verdict
+
+Tests are stdlib-only (unittest) to match the V1 "no external deps" rule.
+Each test isolates ~/.toolmaster to a tmp dir via monkey-patched module paths.
+
+Run: python -m unittest tests.test_v1_survival -v
+"""
+
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+# Make `toolmaster` importable when run from repo root
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from toolmaster import store, loadout, record, compare
+
+
+def _redirect_store(tmp_home: Path):
+    """Point all module-level store paths at a tmp home."""
+    store.TOOLMASTER_HOME = tmp_home
+    store.STORE_DIR = tmp_home / "store"
+    store.BLOBS_DIR = store.STORE_DIR / "blobs"
+    store.MANIFESTS_DIR = store.STORE_DIR / "manifests"
+    store.LOADOUTS_DIR = tmp_home / "loadouts"
+    store.RECORDINGS_DIR = tmp_home / "recordings"
+    # Modules that re-imported the constants need refreshed binding
+    loadout.LOADOUTS_DIR = store.LOADOUTS_DIR
+    record.RECORDINGS_DIR = store.RECORDINGS_DIR
+
+
+def _write_synthetic_skill(parent: Path, name: str, body_suffix: str = "") -> Path:
+    """Build a minimal SKILL.md that passes the quality gate (score >= 60)."""
+    skill_dir = parent / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    description = (
+        f"{name.replace('-', ' ').title()} skill. "
+        f"Use when working on {name.replace('-', ' ')} tasks in a codebase."
+    )
+    body_lines = [
+        f"# {name}",
+        "",
+        "## When to use",
+        f"- Working on {name.replace('-', ' ')}",
+        "- Need structured guidance",
+        "",
+        "## Process",
+        "1. Identify the problem",
+        "2. Apply the technique",
+        "3. Verify the result",
+    ]
+    if body_suffix:
+        body_lines += ["", body_suffix]
+    content = (
+        "---\n"
+        f"name: {name}\n"
+        f'description: {description}\n'
+        "---\n\n"
+        + "\n".join(body_lines)
+        + "\n"
+    )
+    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    return skill_dir
+
+
+class StoreRoundTripTests(unittest.TestCase):
+    """Roadmap Step 1 gate: pin -> resolve round-trip."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pin_then_resolve_reproduces_contents(self):
+        skill_dir = _write_synthetic_skill(self.work, "round-trip-skill")
+        original = (skill_dir / "SKILL.md").read_bytes()
+
+        manifest = store.pin_skill(skill_dir)
+        self.assertEqual(len(manifest["id"]), 64, "manifest id should be full SHA-256 hex")
+        self.assertIn("SKILL.md", manifest["files"])
+
+        target_parent = Path(self.tmp.name) / "resolved"
+        target_parent.mkdir()
+        resolved = store.resolve_skill(manifest["id"], target_parent)
+        self.assertTrue(resolved.is_dir())
+        resolved_md = resolved / "SKILL.md"
+        self.assertTrue(resolved_md.exists())
+        self.assertEqual(resolved_md.read_bytes(), original)
+
+    def test_pin_is_deterministic_and_content_addressed(self):
+        a = _write_synthetic_skill(self.work, "determinism-a")
+        b_parent = Path(self.tmp.name) / "work2"
+        b_parent.mkdir()
+        # Same contents under a different parent path must produce the same manifest hash
+        # iff `source` is stripped — but current code includes `source` in the manifest,
+        # so identical contents under different paths will differ. Instead assert that
+        # re-pinning the SAME directory produces a matching *file-content* fingerprint.
+        m1 = store.pin_skill(a)
+        m2 = store.pin_skill(a)
+        self.assertEqual(
+            {k: v["hash"] for k, v in m1["files"].items()},
+            {k: v["hash"] for k, v in m2["files"].items()},
+            "per-file blob hashes must be stable across re-pins",
+        )
+
+    def test_resolve_accepts_hash_prefix(self):
+        skill_dir = _write_synthetic_skill(self.work, "prefix-lookup")
+        manifest = store.pin_skill(skill_dir)
+        target = Path(self.tmp.name) / "prefix-out"
+        target.mkdir()
+        # Prefix match (first 12 chars) should be unambiguous with one skill in store
+        resolved = store.resolve_skill(manifest["id"][:12], target)
+        self.assertTrue((resolved / "SKILL.md").exists())
+
+    def test_list_skills_reflects_store(self):
+        _write_synthetic_skill(self.work, "list-one")
+        _write_synthetic_skill(self.work, "list-two")
+        store.pin_skill(self.work / "list-one")
+        store.pin_skill(self.work / "list-two")
+        listed = store.list_skills()
+        names = {s["name"] for s in listed}
+        self.assertEqual(names, {"list-one", "list-two"})
+        for s in listed:
+            self.assertEqual(len(s["short_id"]), 12)
+
+
+class LoadoutTests(unittest.TestCase):
+    """Roadmap Step 2 gate: loadouts + priority order + diff."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        self.h_a = store.pin_skill(_write_synthetic_skill(self.work, "alpha"))["id"]
+        self.h_b = store.pin_skill(_write_synthetic_skill(self.work, "bravo"))["id"]
+        self.h_c = store.pin_skill(_write_synthetic_skill(self.work, "charlie"))["id"]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_create_preserves_priority_order(self):
+        lo = loadout.create_loadout("lo_order", [self.h_c, self.h_a, self.h_b])
+        self.assertEqual([s["name"] for s in lo["skills"]], ["charlie", "alpha", "bravo"])
+
+    def test_loadout_round_trip_via_disk(self):
+        loadout.create_loadout("persist", [self.h_a, self.h_b])
+        loaded = loadout.get_loadout("persist")
+        self.assertEqual([s["hash"] for s in loaded["skills"]], [self.h_a, self.h_b])
+
+    def test_diff_reports_adds_removes_and_reorders(self):
+        loadout.create_loadout("left", [self.h_a, self.h_b])
+        loadout.create_loadout("right", [self.h_b, self.h_c])
+        d = loadout.diff_loadouts("left", "right")
+        self.assertIn(self.h_a, d["only_in_left"])
+        self.assertIn(self.h_c, d["only_in_right"])
+        self.assertIn(self.h_b, d["shared"])
+
+    def test_diff_detects_priority_order_change(self):
+        loadout.create_loadout("top_a", [self.h_a, self.h_b])
+        loadout.create_loadout("top_b", [self.h_b, self.h_a])
+        d = loadout.diff_loadouts("top_a", "top_b")
+        # Both skills are shared but at different priorities
+        self.assertEqual(len(d["order_changes"]), 2)
+
+
+class RecordingTests(unittest.TestCase):
+    """Roadmap Step 3 gate: recording persistence + filtering."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_quick_record_persists(self):
+        rec = record.quick_record(
+            task="write a haiku",
+            output="five seven five",
+            loadout_name="poet",
+            rating=4,
+        )
+        loaded = record.get_recording(rec["id"])
+        self.assertEqual(loaded["task"], "write a haiku")
+        self.assertEqual(loaded["rating"], 4)
+        self.assertEqual(loaded["status"], "complete")
+
+    def test_list_filters_by_loadout(self):
+        record.quick_record(task="task a", output="out", loadout_name="lo1")
+        record.quick_record(task="task b", output="out", loadout_name="lo2")
+        record.quick_record(task="task c", output="out", loadout_name="lo1")
+        only_lo1 = record.list_recordings(loadout="lo1")
+        self.assertEqual(len(only_lo1), 2)
+        self.assertTrue(all(r["loadout"] == "lo1" for r in only_lo1))
+
+
+class CompareHeuristicTests(unittest.TestCase):
+    """Roadmap Step 4 gate: compare produces a verdict on real recordings.
+
+    Uses the heuristic path (no LLM) so it runs offline. The LLM path is
+    the actual thesis test — this only proves plumbing, not the thesis.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        # Build two deliberately differentiated loadouts.
+        # "refactor-heavy" is aimed at cleanup tasks, "bug-heavy" at debugging.
+        refactor_hash = store.pin_skill(
+            _write_synthetic_skill(
+                self.work, "refactor",
+                body_suffix="## Extract function\nPull a named chunk out of a long function.",
+            )
+        )["id"]
+        simplify_hash = store.pin_skill(
+            _write_synthetic_skill(
+                self.work, "simplify",
+                body_suffix="## Reduce duplication\nDelete repeated patterns and rename for clarity.",
+            )
+        )["id"]
+        bugfix_hash = store.pin_skill(
+            _write_synthetic_skill(
+                self.work, "bug-fix",
+                body_suffix="## Reproduce the bug\nWrite a failing test that exposes the crash or regression.",
+            )
+        )["id"]
+        debug_hash = store.pin_skill(
+            _write_synthetic_skill(
+                self.work, "debug-trace",
+                body_suffix="## Trace the stack\nInspect the crash stacktrace and isolate the failing call.",
+            )
+        )["id"]
+
+        loadout.create_loadout("refactor_loadout", [refactor_hash, simplify_hash])
+        loadout.create_loadout("bugfix_loadout", [bugfix_hash, debug_hash])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_compare_returns_error_with_no_recordings(self):
+        result = compare.compare_loadouts("refactor_loadout", "bugfix_loadout", use_llm=False)
+        self.assertIn("error", result)
+
+    def test_compare_heuristic_picks_refactor_loadout_for_refactor_tasks(self):
+        # All recordings describe refactor tasks — refactor_loadout should dominate.
+        for i in range(6):
+            record.quick_record(
+                task=f"refactor the long function and reduce duplication in module {i}",
+                output="done",
+                loadout_name="refactor_loadout",
+            )
+        result = compare.compare_loadouts("refactor_loadout", "bugfix_loadout", use_llm=False)
+        self.assertNotIn("error", result)
+        self.assertEqual(result["tasks_evaluated"], 6)
+        self.assertEqual(result["method"], "heuristic")
+        self.assertEqual(
+            result["winner"], "refactor_loadout",
+            f"heuristic should pick refactor_loadout for refactor tasks, got {result}",
+        )
+
+    def test_compare_heuristic_picks_bugfix_loadout_for_bug_tasks(self):
+        for i in range(6):
+            record.quick_record(
+                task=f"reproduce and bug-fix a crash in the trace handler {i}",
+                output="done",
+                loadout_name="bugfix_loadout",
+            )
+        result = compare.compare_loadouts("refactor_loadout", "bugfix_loadout", use_llm=False)
+        self.assertNotIn("error", result)
+        self.assertEqual(
+            result["winner"], "bugfix_loadout",
+            f"heuristic should pick bugfix_loadout for bug tasks, got {result}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
