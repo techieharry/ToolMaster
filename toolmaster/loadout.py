@@ -58,26 +58,35 @@ def list_loadouts() -> list[dict]:
     return loadouts
 
 
+# Multi-agent target paths. Each entry maps target name -> cwd-relative path
+# for the skill directory. Adding a new target here is the only place to extend.
+AGENT_TARGETS = {
+    "claude":  Path(".claude") / "skills",        # Claude Code
+    "agents":  Path(".agents") / "skills",        # generic Anthropic Agents spec
+    "cursor":  Path(".cursor") / "rules",         # Cursor (rules format)
+    "codex":   Path(".codex") / "skills",         # OpenAI Codex CLI
+    "aider":   Path(".aider") / "conventions",    # Aider
+    "windsurf": Path(".windsurf") / "rules",      # Windsurf
+    "continue": Path(".continue") / "context",    # Continue
+}
+
+
 def apply_loadout(name: str, target: str = "claude") -> Path:
     """Apply a loadout — resolve skills into agent skill paths.
 
-    Supported targets:
-    - "claude": .claude/skills/
-    - "agents": .agents/skills/
+    Supported targets: see AGENT_TARGETS. Each maps to the conventional
+    skill-directory for that agent, resolved under the current working dir.
 
     Returns the target directory. Writes a toolmaster.lock sidecar.
     """
     loadout = get_loadout(name)
 
-    target_map = {
-        "claude": Path.cwd() / ".claude" / "skills",
-        "agents": Path.cwd() / ".agents" / "skills",
-    }
+    if target not in AGENT_TARGETS:
+        raise ValueError(
+            f"Unknown target: {target}. Supported: {sorted(AGENT_TARGETS.keys())}"
+        )
 
-    if target not in target_map:
-        raise ValueError(f"Unknown target: {target}. Use: {list(target_map.keys())}")
-
-    target_dir = target_map[target]
+    target_dir = Path.cwd() / AGENT_TARGETS[target]
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve each skill into the target

@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from toolmaster import store, loadout, record, compare
+from toolmaster import store, loadout, record, compare, offer
 
 
 def _redirect_store(tmp_home: Path):
@@ -37,6 +37,10 @@ def _redirect_store(tmp_home: Path):
     # Modules that re-imported the constants need refreshed binding
     loadout.LOADOUTS_DIR = store.LOADOUTS_DIR
     record.RECORDINGS_DIR = store.RECORDINGS_DIR
+    compare.TOOLMASTER_HOME = tmp_home
+    compare.COMPARE_CACHE_DIR = tmp_home / "compare_cache"
+    offer.TOOLMASTER_HOME = tmp_home
+    offer.OFFER_CACHE_DIR = tmp_home / "offer_cache"
 
 
 def _write_synthetic_skill(parent: Path, name: str, body_suffix: str = "") -> Path:
@@ -294,6 +298,170 @@ class CompareHeuristicTests(unittest.TestCase):
             result["winner"], "bugfix_loadout",
             f"heuristic should pick bugfix_loadout for bug tasks, got {result}",
         )
+
+
+class MultiAgentTargetTests(unittest.TestCase):
+    """Loadout apply now supports 7 agent targets, not just claude/agents."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        self.h = store.pin_skill(_write_synthetic_skill(self.work, "single-skill"))["id"]
+        loadout.create_loadout("mini", [self.h])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_agent_targets_cover_expected_set(self):
+        expected = {"claude", "agents", "cursor", "codex", "aider", "windsurf", "continue"}
+        self.assertEqual(set(loadout.AGENT_TARGETS.keys()), expected)
+
+    def test_unknown_target_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            loadout.apply_loadout("mini", target="copilot")
+        self.assertIn("copilot", str(ctx.exception))
+
+    def test_apply_to_each_target_creates_expected_dir(self):
+        # Use a tmp cwd for this — apply uses Path.cwd()
+        import os as _os
+        original_cwd = _os.getcwd()
+        workdir = Path(self.tmp.name) / "app-work"
+        workdir.mkdir()
+        try:
+            _os.chdir(workdir)
+            for target, rel_path in loadout.AGENT_TARGETS.items():
+                loadout.apply_loadout("mini", target=target)
+                expected = workdir / rel_path / "single-skill"
+                self.assertTrue(
+                    expected.is_dir(),
+                    f"target={target} should create {expected}",
+                )
+                self.assertTrue((expected / "SKILL.md").exists())
+        finally:
+            _os.chdir(original_cwd)
+
+
+class CompareCacheAndCostTests(unittest.TestCase):
+    """Roadmap Step 4 residuals: cost estimation + result caching."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        self.h_ref = store.pin_skill(_write_synthetic_skill(self.work, "refactor"))["id"]
+        self.h_bug = store.pin_skill(_write_synthetic_skill(self.work, "bug-fix"))["id"]
+        loadout.create_loadout("a", [self.h_ref])
+        loadout.create_loadout("b", [self.h_bug])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_estimate_cost_returns_concrete_numbers(self):
+        record.quick_record(task="refactor thing", output="done", loadout_name="a")
+        record.quick_record(task="another refactor", output="done", loadout_name="a")
+        est = compare.estimate_compare_cost("a", "b")
+        self.assertNotIn("error", est)
+        self.assertEqual(est["task_count"], 2)
+        self.assertGreater(est["est_input_tokens"], 0)
+        self.assertGreater(est["est_output_tokens"], 0)
+        self.assertGreater(est["est_usd"], 0)
+        self.assertIn("model", est)
+
+    def test_estimate_cost_errors_on_no_recordings(self):
+        est = compare.estimate_compare_cost("a", "b")
+        self.assertIn("error", est)
+
+    def test_compare_does_not_cache_heuristic_results(self):
+        record.quick_record(task="refactor handler", output="done", loadout_name="a")
+        compare.compare_loadouts("a", "b", use_llm=False)
+        # Heuristic is cheap — cache dir may exist from setup but should be empty of entries
+        cache_dir = self.tmp_home / "compare_cache"
+        if cache_dir.exists():
+            self.assertEqual(list(cache_dir.glob("*.json")), [])
+
+
+class OfferEngineColdStartTests(unittest.TestCase):
+    """V2: offer engine returns coherent canonical/iterated/sideways."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        # Build four distinct skills
+        self.h_ref = store.pin_skill(_write_synthetic_skill(
+            self.work, "refactor",
+            body_suffix="## Extract function\nPull a named chunk out of a long function.",
+        ))["id"]
+        self.h_cr = store.pin_skill(_write_synthetic_skill(
+            self.work, "code-review",
+            body_suffix="## Review checklist\nReview code for clarity, correctness, safety.",
+        ))["id"]
+        self.h_bug = store.pin_skill(_write_synthetic_skill(
+            self.work, "bug-fix",
+            body_suffix="## Reproduce the bug\nWrite a failing test that exposes the crash.",
+        ))["id"]
+        self.h_test = store.pin_skill(_write_synthetic_skill(
+            self.work, "test-generator",
+            body_suffix="## Generate tests\nBuild a failing test first, then fix.",
+        ))["id"]
+
+        # Three loadouts
+        loadout.create_loadout("refactor_stack", [self.h_ref, self.h_cr])
+        loadout.create_loadout("refactor_stack_plus", [self.h_ref, self.h_cr, self.h_test])  # close cousin
+        loadout.create_loadout("bugfix_stack", [self.h_bug, self.h_test])  # sideways candidate
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_empty_store_returns_no_offers(self):
+        # Redirect to a fresh tmp home with no loadouts
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            _redirect_store(Path(td) / ".toolmaster")
+            self.assertEqual(offer.suggest_loadouts("any task"), [])
+
+    def test_refactor_task_picks_refactor_canonical(self):
+        offers = offer.suggest_loadouts(
+            "refactor the long handler function and extract helpers", top_n=3
+        )
+        self.assertGreater(len(offers), 0)
+        self.assertEqual(offers[0]["type"], "canonical")
+        self.assertIn(offers[0]["name"], ("refactor_stack", "refactor_stack_plus"))
+
+    def test_offers_include_at_most_one_of_each_type(self):
+        offers = offer.suggest_loadouts(
+            "refactor the duplicated validation logic", top_n=3
+        )
+        types = [o["type"] for o in offers]
+        # At most one of each, no duplicates
+        self.assertEqual(len(types), len(set(types)))
+
+    def test_cold_start_flag_true_when_no_recordings(self):
+        offers = offer.suggest_loadouts("refactor something", top_n=1)
+        self.assertTrue(offers[0]["cold_start"])
+
+    def test_sideways_has_low_overlap_with_canonical(self):
+        offers = offer.suggest_loadouts(
+            "refactor the authorization handler to reduce nesting", top_n=3
+        )
+        canonical = offers[0]
+        sideways = next((o for o in offers if o["type"] == "sideways"), None)
+        if sideways is not None:
+            canon_skills = set(canonical["skills"])
+            side_skills = set(sideways["skills"])
+            overlap = len(canon_skills & side_skills) / max(len(canon_skills), 1)
+            self.assertLess(overlap, 0.5,
+                f"sideways overlap should be <50% but got {overlap:.0%}")
 
 
 if __name__ == "__main__":

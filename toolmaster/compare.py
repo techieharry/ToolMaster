@@ -5,19 +5,96 @@ recorded tasks. Uses LLM-as-judge when API key available, falls back
 to heuristic scoring.
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
 
-from .store import get_manifest, read_blob
+from .store import get_manifest, read_blob, TOOLMASTER_HOME
 from .loadout import get_loadout
 from .record import list_recordings
 
 
-def compare_loadouts(name_a: str, name_b: str, use_llm: bool = True) -> dict:
+# Cost per 1M tokens for the judge models (rough, public list prices as of 2026)
+COST_PER_1M_TOKENS = {
+    "anthropic/claude-haiku-4.5":  {"input": 1.00, "output": 5.00},
+    "anthropic/claude-haiku-4-5":  {"input": 1.00, "output": 5.00},
+    "claude-haiku-4-5-20251001":   {"input": 1.00, "output": 5.00},
+    "anthropic/claude-sonnet-4.6": {"input": 3.00, "output": 15.00},
+    "default":                     {"input": 1.00, "output": 5.00},
+}
+
+COMPARE_CACHE_DIR = TOOLMASTER_HOME / "compare_cache"
+
+
+def estimate_compare_cost(loadout_a: str, loadout_b: str) -> dict:
+    """Estimate token cost before running compare.
+
+    Returns dict with task_count, est_input_tokens, est_output_tokens, est_usd.
+    Useful to surface before an LLM-judge run hits the user's API bill.
+    """
+    try:
+        get_loadout(loadout_a)
+        get_loadout(loadout_b)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+
+    recordings = [r for r in list_recordings() if r.get("status") == "complete"]
+    n = len(recordings)
+    if n == 0:
+        return {"error": "No complete recordings to compare against."}
+
+    # Rough: each judge call sends ~600 input tokens (prompt template + skill previews)
+    # and receives ~150 output tokens (JSON verdict). Actual usage varies ±30%.
+    est_in = n * 600
+    est_out = n * 150
+    model = os.environ.get("TOOLMASTER_MODEL", "anthropic/claude-haiku-4.5")
+    price = COST_PER_1M_TOKENS.get(model, COST_PER_1M_TOKENS["default"])
+    est_usd = (est_in / 1_000_000 * price["input"]) + (est_out / 1_000_000 * price["output"])
+
+    return {
+        "task_count": n,
+        "est_input_tokens": est_in,
+        "est_output_tokens": est_out,
+        "est_usd": round(est_usd, 4),
+        "model": model,
+    }
+
+
+def _cache_key(loadout_a: str, loadout_b: str, recordings: list[dict]) -> str:
+    """Stable cache key: hashes the (loadout pair, recording set) tuple."""
+    lo_a = get_loadout(loadout_a)
+    lo_b = get_loadout(loadout_b)
+    a_hash = "|".join(sorted(s["hash"] for s in lo_a["skills"]))
+    b_hash = "|".join(sorted(s["hash"] for s in lo_b["skills"]))
+    rec_ids = "|".join(sorted(r["id"] for r in recordings if r.get("status") == "complete"))
+    blob = f"{a_hash}::{b_hash}::{rec_ids}".encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _cache_read(key: str) -> dict | None:
+    path = COMPARE_CACHE_DIR / f"{key}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _cache_write(key: str, result: dict):
+    COMPARE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = COMPARE_CACHE_DIR / f"{key}.json"
+    path.write_text(json.dumps(result, indent=2))
+
+
+def compare_loadouts(name_a: str, name_b: str, use_llm: bool = True,
+                      use_cache: bool = True) -> dict:
     """Compare two loadouts against all recorded tasks.
 
     Returns a verdict dict with per-task breakdowns and aggregate scores.
+    Results are cached by (loadout_pair, recording_set) hash so a re-run
+    against unchanged inputs returns instantly with no LLM cost.
     """
     lo_a = get_loadout(name_a)
     lo_b = get_loadout(name_b)
@@ -34,6 +111,14 @@ def compare_loadouts(name_a: str, name_b: str, use_llm: bool = True) -> dict:
     complete = [r for r in recordings if r["status"] == "complete"]
     if not complete:
         return {"error": "No complete recordings. Finish recording some tasks first."}
+
+    # Cache short-circuit: same loadouts + same recordings = same verdict
+    cache_key = _cache_key(name_a, name_b, complete)
+    if use_cache:
+        cached = _cache_read(cache_key)
+        if cached is not None:
+            cached["from_cache"] = True
+            return cached
 
     # Compare per task — blind A/B with randomized labeling (from Skill Forge)
     import random
@@ -70,7 +155,7 @@ def compare_loadouts(name_a: str, name_b: str, use_llm: bool = True) -> dict:
     wins_b = sum(1 for r in results if r["winner"] == name_b)
     ties = sum(1 for r in results if r["winner"] == "tie")
 
-    return {
+    result = {
         "loadout_a": name_a,
         "loadout_b": name_b,
         "tasks_evaluated": len(results),
@@ -80,7 +165,12 @@ def compare_loadouts(name_a: str, name_b: str, use_llm: bool = True) -> dict:
         "winner": name_a if wins_a > wins_b else name_b if wins_b > wins_a else "tie",
         "method": "llm" if (use_llm and _has_api_key()) else "heuristic",
         "details": results,
+        "from_cache": False,
     }
+    if use_cache and result["method"] == "llm":
+        # Only cache LLM results — heuristic is cheap enough to re-run
+        _cache_write(cache_key, result)
+    return result
 
 
 def _get_loadout_skills(loadout: dict) -> list[dict]:

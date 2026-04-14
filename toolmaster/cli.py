@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from . import store, loadout, record, compare, suggest, protocol, scout, quality
+from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer
 
 
 def cmd_pin(args):
@@ -199,15 +199,27 @@ def cmd_compare(args):
     """Compare two loadouts against recorded tasks."""
     try:
         use_llm = not args.heuristic
-        result = compare.compare_loadouts(args.a, args.b, use_llm=use_llm)
+
+        # Cost preview before burning tokens
+        if use_llm and not args.no_cost_preview:
+            est = compare.estimate_compare_cost(args.a, args.b)
+            if "error" not in est:
+                print(f"\nEstimated cost: {est['task_count']} tasks × "
+                      f"({est['est_input_tokens']} in + {est['est_output_tokens']} out) tokens "
+                      f"= ~${est['est_usd']} via {est['model']}")
+                print("(Results are cached by (loadout-pair, recording-set); re-runs are free.)\n")
+
+        result = compare.compare_loadouts(args.a, args.b, use_llm=use_llm,
+                                           use_cache=not args.no_cache)
 
         if "error" in result:
             print(f"Error: {result['error']}", file=sys.stderr)
             sys.exit(1)
 
+        cache_tag = " (from cache)" if result.get("from_cache") else ""
         print(f"\n{'='*60}")
         print(f"  LOADOUT COMPARISON: {result['loadout_a']} vs {result['loadout_b']}")
-        print(f"  Method: {result['method']}")
+        print(f"  Method: {result['method']}{cache_tag}")
         print(f"{'='*60}")
         print(f"\n  Tasks evaluated: {result['tasks_evaluated']}")
         print(f"  {result['loadout_a']}: {result['wins_a']} wins")
@@ -279,6 +291,44 @@ def cmd_suggest(args):
             print(f"  Use: toolmaster loadout create <name> <hash1> <hash2> ...")
             print(f"  Or:  toolmaster resolve <hash> <target-dir>\n")
 
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_offer(args):
+    """V2 offer engine — return 3 loadout offers for a task."""
+    try:
+        offers = offer.suggest_loadouts(args.task, top_n=args.top or 3)
+        if not offers:
+            print("No loadouts in the store. Create one with 'toolmaster loadout create <name> <hash1>...'")
+            return
+
+        mode = "cold-start" if offers[0].get("cold_start") else "warm (outcome-weighted)"
+        print(f"\n{'='*64}")
+        print(f"  LOADOUT OFFERS for: \"{args.task[:55]}\"")
+        print(f"  Mode: {mode}")
+        print(f"{'='*64}\n")
+
+        labels = {
+            "canonical": "[1] CANONICAL   - top-ranked loadout",
+            "iterated":  "[2] ITERATED    - canonical's refined cousin",
+            "sideways":  "[3] SIDEWAYS    - compositionally different option",
+        }
+
+        for i, o in enumerate(offers, 1):
+            label = labels.get(o["type"], f"[{i}] {o['type'].upper()}")
+            print(label)
+            print(f"    name:      {o['name']}")
+            print(f"    skills:    {', '.join(o['skills'])}")
+            print(f"    relevance: {o['relevance']}")
+            print(f"    why:       {o['reason']}")
+            if "iterated_note" in o:
+                print(f"    tweak:     {o['iterated_note']}")
+            print()
+
+        print("Pick one with: toolmaster loadout apply <name> --target <agent>")
+        print("Your choice will be logged and feed future offer rankings.\n")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -434,7 +484,8 @@ def main():
 
     p_lo_apply = lo_sub.add_parser("apply", help="Apply a loadout to agent paths")
     p_lo_apply.add_argument("name", help="Loadout name")
-    p_lo_apply.add_argument("--target", default="claude", choices=["claude", "agents"],
+    p_lo_apply.add_argument("--target", default="claude",
+                            choices=sorted(loadout.AGENT_TARGETS.keys()),
                             help="Target agent system (default: claude)")
 
     p_lo_diff = lo_sub.add_parser("diff", help="Diff two loadouts")
@@ -457,6 +508,13 @@ def main():
     p_cmp.add_argument("a", help="First loadout name")
     p_cmp.add_argument("b", help="Second loadout name")
     p_cmp.add_argument("--heuristic", action="store_true", help="Use heuristic instead of LLM")
+    p_cmp.add_argument("--no-cache", action="store_true", help="Skip cache, force re-judge")
+    p_cmp.add_argument("--no-cost-preview", action="store_true", help="Suppress pre-run cost estimate")
+
+    # offer (V2)
+    p_off = sub.add_parser("offer", help="V2: return 3 loadout offers for a task")
+    p_off.add_argument("task", help="Task description")
+    p_off.add_argument("--top", type=int, default=3, help="Number of offers (default: 3)")
 
     # suggest
     p_sug = sub.add_parser("suggest", help="Suggest skills for a task")
@@ -529,6 +587,7 @@ def main():
         "record": cmd_record,
         "recordings": cmd_record_list,
         "compare": cmd_compare,
+        "offer": cmd_offer,
         "suggest": cmd_suggest,
         "scout": cmd_scout,
         "checkin": cmd_checkin,
