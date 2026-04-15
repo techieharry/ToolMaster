@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from toolmaster import store, loadout, record, compare, offer
+from toolmaster import store, loadout, record, compare, offer, scout
 
 
 def _redirect_store(tmp_home: Path):
@@ -462,6 +462,87 @@ class OfferEngineColdStartTests(unittest.TestCase):
             overlap = len(canon_skills & side_skills) / max(len(canon_skills), 1)
             self.assertLess(overlap, 0.5,
                 f"sideways overlap should be <50% but got {overlap:.0%}")
+
+
+class ScoutDiscoveryTests(unittest.TestCase):
+    """Discovery-layer sanity tests. No network — only introspect config/helpers."""
+
+    def test_watch_list_has_no_duplicates(self):
+        self.assertEqual(
+            len(scout.DEFAULT_WATCH_REPOS),
+            len(set(scout.DEFAULT_WATCH_REPOS)),
+            "DEFAULT_WATCH_REPOS must not contain duplicates",
+        )
+
+    def test_watch_list_has_valid_repo_slugs(self):
+        for slug in scout.DEFAULT_WATCH_REPOS:
+            parts = slug.split("/")
+            self.assertEqual(len(parts), 2, f"Bad slug: {slug}")
+            self.assertTrue(parts[0], f"Empty owner: {slug}")
+            self.assertTrue(parts[1], f"Empty repo: {slug}")
+
+    def test_awesome_lists_are_subset_of_or_additional_to_watch(self):
+        # Awesome lists should all be valid GitHub slugs too
+        for slug in scout.AWESOME_LISTS:
+            parts = slug.split("/")
+            self.assertEqual(len(parts), 2, f"Bad awesome-list slug: {slug}")
+
+    def test_topics_are_lowercase_kebab(self):
+        for topic in scout.GITHUB_TOPICS:
+            self.assertEqual(topic, topic.lower(), f"Topic must be lowercase: {topic}")
+            self.assertNotIn(" ", topic, f"Topic must be kebab-case: {topic}")
+
+    def test_github_headers_include_auth_when_token_set(self):
+        import os as _os
+        original = _os.environ.get("GITHUB_TOKEN")
+        _os.environ["GITHUB_TOKEN"] = "test-token-123"
+        try:
+            headers = scout._github_headers()
+            self.assertEqual(headers.get("Authorization"), "Bearer test-token-123")
+        finally:
+            if original is None:
+                _os.environ.pop("GITHUB_TOKEN", None)
+            else:
+                _os.environ["GITHUB_TOKEN"] = original
+
+    def test_github_headers_falls_back_to_gh_token(self):
+        import os as _os
+        originals = {
+            "GITHUB_TOKEN": _os.environ.pop("GITHUB_TOKEN", None),
+            "GH_TOKEN": _os.environ.get("GH_TOKEN"),
+        }
+        _os.environ["GH_TOKEN"] = "gh-fallback-token"
+        try:
+            headers = scout._github_headers()
+            self.assertEqual(headers.get("Authorization"), "Bearer gh-fallback-token")
+        finally:
+            if originals["GITHUB_TOKEN"]:
+                _os.environ["GITHUB_TOKEN"] = originals["GITHUB_TOKEN"]
+            if originals["GH_TOKEN"]:
+                _os.environ["GH_TOKEN"] = originals["GH_TOKEN"]
+            else:
+                _os.environ.pop("GH_TOKEN", None)
+
+    def test_github_headers_omits_auth_when_no_token(self):
+        import os as _os
+        originals = {
+            "GITHUB_TOKEN": _os.environ.pop("GITHUB_TOKEN", None),
+            "GH_TOKEN": _os.environ.pop("GH_TOKEN", None),
+        }
+        try:
+            headers = scout._github_headers()
+            self.assertNotIn("Authorization", headers)
+            self.assertIn("User-Agent", headers)
+        finally:
+            if originals["GITHUB_TOKEN"]:
+                _os.environ["GITHUB_TOKEN"] = originals["GITHUB_TOKEN"]
+            if originals["GH_TOKEN"]:
+                _os.environ["GH_TOKEN"] = originals["GH_TOKEN"]
+
+    def test_discovery_star_threshold_is_sane(self):
+        # Must be > 0 and not so high that it excludes legit small libraries
+        self.assertGreater(scout.MIN_DISCOVERY_STARS, 0)
+        self.assertLess(scout.MIN_DISCOVERY_STARS, 1000)
 
 
 if __name__ == "__main__":

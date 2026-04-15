@@ -14,6 +14,7 @@ import json
 import os
 import urllib.request
 import urllib.parse
+import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -25,15 +26,85 @@ PROPOSALS_DIR = TOOLMASTER_HOME / "proposals"
 SCOUT_STATE_FILE = TOOLMASTER_HOME / "scout_state.json"
 SCOUT_LOG_FILE = TOOLMASTER_HOME / "scout.log"
 
-# Repos to watch for skill patterns
+
+def _github_headers() -> dict:
+    """Return headers for GitHub API requests, auth'd if a token is available.
+
+    Order of precedence:
+      1. GITHUB_TOKEN env var
+      2. GH_TOKEN env var (gh CLI's convention)
+      3. Unauthenticated (60 req/hr limit — expect 429s on busy cycles)
+
+    With auth, the rate limit jumps to 5000 req/hr which is what expanded
+    discovery (topics + awesome-list mining) needs to complete a full cycle.
+    """
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "ToolMaster-Scout",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+# Repos to watch for skill patterns.
+# Tier 1: core ecosystem (Anthropic + well-known aggregators, verified via gh API)
+# Tier 2: high-signal skill libraries (audited via gh search, star counts as of 2026-04-14)
+# Tier 3: domain-specific / niche but credible
 DEFAULT_WATCH_REPOS = [
+    # Tier 1 - core
     "anthropics/skills",
     "obra/superpowers",
     "wshobson/agents",
     "agentskills/agentskills",
     "lobehub/lobe-chat",
-    "multica-ai/multica",
+    # Tier 2 - high-signal libraries (53k+ stars)
+    "ComposioHQ/awesome-claude-skills",      # 53.8k - curated Claude skills
+    "hesreallyhim/awesome-claude-code",      # 38.8k - skills/hooks/commands for Claude Code
+    "sickn33/antigravity-awesome-skills",    # 33.1k - 1,400+ installable skills
+    "K-Dense-AI/scientific-agent-skills",    # 18.5k - research/science/finance skills
+    "VoltAgent/awesome-agent-skills",        # 15.8k - 1,000+ curated agent skills
+    "alirezarezvani/claude-skills",          # 11.1k - 232+ engineering/marketing skills
+    # Tier 3 - niche/domain-specific
+    "refly-ai/refly",                        #  7.2k - skills builder
+    "trailofbits/skills",                    #  4.6k - security/vulnerability skills
+    "heilcheng/awesome-agent-skills",        #  3.9k - tutorials + skill directories
+    "OthmanAdi/planning-with-files",         # 18.7k - Claude Code planning skill
+    "softaworks/agent-toolkit",              #  1.5k - curated coding agent skills
+    "samber/cc-skills-golang",               #  1.2k - Go-specific skills
+    # Competitor watch
+    "majiayu000/claude-skill-registry",      # someone else building a skill registry
+    "addyosmani/agent-skills",               # production engineering skills
 ]
+
+# GitHub topics to crawl. Each topic page lists repos tagged with it.
+# Scout rotates through these and pulls top-starred candidates per cycle.
+GITHUB_TOPICS = [
+    "agent-skills",
+    "claude-code",
+    "claude-skills",
+    "ai-agents",
+    "llm-agent",
+    "mcp-server",
+    "agent-framework",
+    "prompt-engineering",
+]
+
+# Awesome-list repos to mine for secondary link extraction.
+# These contain README.md files with GitHub links; scout extracts them
+# as additional repo candidates (star-filtered before audit).
+AWESOME_LISTS = [
+    "ComposioHQ/awesome-claude-skills",
+    "hesreallyhim/awesome-claude-code",
+    "VoltAgent/awesome-agent-skills",
+    "heilcheng/awesome-agent-skills",
+    "e2b-dev/awesome-ai-agents",
+    "kaushikb11/awesome-llm-agents",
+]
+
+# Minimum star threshold for repos discovered via topics/awesome lists.
+# Prevents audit budget waste on drive-by repos.
+MIN_DISCOVERY_STARS = 50
 
 # Rotating search queries — each cycle picks the next batch
 SEARCH_QUERIES = [
@@ -47,6 +118,12 @@ SEARCH_QUERIES = [
     "AI copywriting prompt engineering",
     "agent workflow automation skills",
     "LLM tool prompt templates",
+    # V2 additions: content-addressed skill discovery queries
+    "filename:SKILL.md agent",
+    "filename:SKILL.md claude",
+    "claude code workflow orchestration",
+    "cursor rules skill library",
+    "codex skill directory",
 ]
 
 
@@ -198,10 +275,7 @@ def _search_github_repos() -> list[dict]:
         try:
             encoded = urllib.parse.quote(query)
             url = f"https://api.github.com/search/repositories?q={encoded}&sort=updated&per_page=5"
-            req = urllib.request.Request(url, headers={
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "ToolMaster-Scout",
-            })
+            req = urllib.request.Request(url, headers=_github_headers())
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
                 for item in data.get("items", []):
@@ -217,11 +291,131 @@ def _search_github_repos() -> list[dict]:
         except Exception as e:
             _log(f"Search failed for '{query}': {e}")
 
+    # Phase 1b: GitHub Topics discovery (2 topics per cycle, rotating)
+    topic_batch_start = (cycle_count * 2) % len(GITHUB_TOPICS)
+    topics_this_cycle = GITHUB_TOPICS[topic_batch_start:topic_batch_start + 2]
+    if not topics_this_cycle:
+        topics_this_cycle = GITHUB_TOPICS[:2]
+    for topic in topics_this_cycle:
+        try:
+            new_from_topic = _fetch_repos_by_topic(topic, known_repos, limit=10)
+            for r in new_from_topic:
+                repos.append(r)
+                known_repos.add(r["full_name"])
+        except Exception as e:
+            _log(f"Topic '{topic}' discovery failed: {e}")
+
+    # Phase 1c: Awesome-list link extraction (1 list per cycle, rotating)
+    if AWESOME_LISTS:
+        awesome_idx = cycle_count % len(AWESOME_LISTS)
+        awesome_repo = AWESOME_LISTS[awesome_idx]
+        try:
+            new_from_list = _extract_repos_from_awesome_list(awesome_repo, known_repos, limit=15)
+            for r in new_from_list:
+                repos.append(r)
+                known_repos.add(r["full_name"])
+        except Exception as e:
+            _log(f"Awesome-list mining failed for {awesome_repo}: {e}")
+
     # Save known repos
     state["known_repos"] = list(known_repos)
     _save_state_data(state)
 
     return repos
+
+
+def _fetch_repos_by_topic(topic: str, known: set, limit: int = 10) -> list[dict]:
+    """Fetch top-starred repos tagged with a given GitHub topic.
+
+    Uses the search API with topic: qualifier, filters by MIN_DISCOVERY_STARS,
+    skips anything already in `known`. Returns candidates ready to audit.
+    """
+    query = f"topic:{topic} stars:>={MIN_DISCOVERY_STARS}"
+    encoded = urllib.parse.quote(query)
+    url = f"https://api.github.com/search/repositories?q={encoded}&sort=stars&per_page={limit}"
+    req = urllib.request.Request(url, headers=_github_headers())
+    found = []
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+        for item in data.get("items", []):
+            name = item["full_name"]
+            if name in known:
+                continue
+            found.append({
+                "full_name": name,
+                "description": item.get("description", "") or "",
+                "stars": item.get("stargazers_count", 0),
+                "updated": item.get("updated_at", ""),
+                "source": f"topic:{topic}",
+            })
+    if found:
+        _log(f"Topic '{topic}': +{len(found)} new repos (top star={found[0]['stars']})")
+    return found
+
+
+def _extract_repos_from_awesome_list(list_repo: str, known: set, limit: int = 15) -> list[dict]:
+    """Read an awesome-list README and extract linked GitHub repos.
+
+    Awesome lists follow a convention: they link to GitHub repos in markdown
+    lists. This parses the README, extracts github.com links, filters out
+    duplicates + already-known, and star-validates the top candidates.
+    """
+    import re
+    readme = _fetch_file_content(list_repo, "README.md")
+    if not readme:
+        return []
+
+    # Extract [text](https://github.com/owner/repo) patterns
+    pattern = re.compile(r"https?://github\.com/([^/\s\)]+/[^/\s\)#?]+)")
+    candidates = {}
+    for match in pattern.finditer(readme):
+        slug = match.group(1).rstrip(".,;:)")
+        # Skip the list repo itself, user profiles, and non-repo paths
+        if slug == list_repo or "/" not in slug:
+            continue
+        parts = slug.split("/")
+        if len(parts) != 2 or not parts[1]:
+            continue
+        if slug in known:
+            continue
+        candidates[slug] = candidates.get(slug, 0) + 1  # count mentions
+
+    # Sort by mention count (more-mentioned = more prominent in the list)
+    ranked = sorted(candidates.items(), key=lambda x: -x[1])
+
+    # Star-validate the top N to avoid wasting audit budget on junk
+    found = []
+    for slug, _mentions in ranked[:limit * 2]:
+        try:
+            url = f"https://api.github.com/repos/{slug}"
+            req = urllib.request.Request(url, headers=_github_headers())
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read())
+                stars = data.get("stargazers_count", 0)
+                if stars < MIN_DISCOVERY_STARS:
+                    continue
+                found.append({
+                    "full_name": slug,
+                    "description": data.get("description", "") or "",
+                    "stars": stars,
+                    "updated": data.get("updated_at", ""),
+                    "source": f"awesome-list:{list_repo}",
+                })
+                if len(found) >= limit:
+                    break
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                # Rate limited — abort rest of mining this cycle
+                _log(f"GitHub rate limit hit during awesome-list mining")
+                break
+            continue
+        except Exception:
+            continue
+
+    if found:
+        _log(f"Awesome-list {list_repo}: +{len(found)} validated repos "
+             f"(stars >= {MIN_DISCOVERY_STARS})")
+    return found
 
 
 def _scan_repo_for_skills(repo: dict) -> list[dict]:
@@ -233,10 +427,7 @@ def _scan_repo_for_skills(repo: dict) -> list[dict]:
     for branch in ["main", "master"]:
         try:
             url = f"https://api.github.com/repos/{repo_name}/git/trees/{branch}?recursive=1"
-            req = urllib.request.Request(url, headers={
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "ToolMaster-Scout",
-            })
+            req = urllib.request.Request(url, headers=_github_headers())
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
                 tree = data.get("tree", [])
