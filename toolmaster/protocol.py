@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from .store import list_skills, get_manifest, pin_skill, TOOLMASTER_HOME
 from .suggest import suggest, get_proven_skills
+from .loadout import list_loadouts
 
 
 def checkin(project_dir: str | Path) -> dict:
@@ -37,9 +38,15 @@ def checkin(project_dir: str | Path) -> dict:
     # Load proposals if any
     proposals = _load_proposals(project_dir)
 
+    # Loadouts available for delegation
+    try:
+        loadouts = list_loadouts()
+    except Exception:
+        loadouts = []
+
     # Build checkin response
     state = {
-        "protocol_version": "1.0",
+        "protocol_version": "1.1",
         "checked_in_at": datetime.now(timezone.utc).isoformat(),
         "project": project_dir.name,
         "toolbox": {
@@ -47,6 +54,10 @@ def checkin(project_dir: str | Path) -> dict:
             "proven": [
                 {"name": p["name"], "hash": p["hash"], "used": p["times_used"], "edit": p["avg_edit_distance"]}
                 for p in get_proven_skills(min_uses=2, max_edit_distance=40.0)
+            ],
+            "loadouts": [
+                {"name": lo["name"], "skills": lo["skill_names"], "skill_count": lo["skills"]}
+                for lo in loadouts
             ],
         },
         "proposals": proposals,
@@ -69,22 +80,33 @@ def checkin(project_dir: str | Path) -> dict:
 def checkout(project_dir: str | Path, task_description: str) -> dict:
     """Phase 2: Agent checks if tools exist for a task before building.
 
-    Returns suggestions and records that the agent checked.
-    This is how we KNOW the agent looked before building from scratch.
+    Returns both individual skill suggestions AND V2 loadout offers, so the
+    agent can decide whether to compose from skills or delegate to a full
+    loadout. Records that the check happened.
     """
     project_dir = Path(project_dir)
     manifest = _load_manifest(project_dir)
 
-    # Get suggestions
+    # Individual skill suggestions (V1 path)
     suggestions = suggest(task_description, top_n=5, use_llm=False)
+
+    # V2 loadout offers — only try if loadouts exist, otherwise offer() returns []
+    try:
+        from .offer import suggest_loadouts
+        loadout_offers = suggest_loadouts(task_description, top_n=3)
+    except Exception:
+        loadout_offers = []
 
     # Record the checkout
     manifest["session"]["tools_checked"].append({
         "task": task_description,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "suggestions_returned": len(suggestions),
+        "loadout_offers_returned": len(loadout_offers),
         "top_suggestion": suggestions[0]["name"] if suggestions else None,
         "top_score": suggestions[0].get("relevance_score", 0) if suggestions else 0,
+        "top_loadout": loadout_offers[0]["name"] if loadout_offers else None,
+        "top_loadout_relevance": loadout_offers[0]["relevance"] if loadout_offers else 0,
     })
 
     _save_manifest(project_dir, manifest)
@@ -101,6 +123,17 @@ def checkout(project_dir: str | Path, task_description: str) -> dict:
                 "description": s["description"][:200],
             }
             for s in suggestions
+        ],
+        "loadout_offers": [
+            {
+                "type": o["type"],
+                "name": o["name"],
+                "skills": o["skills"],
+                "relevance": o["relevance"],
+                "reason": o["reason"],
+                "cold_start": o["cold_start"],
+            }
+            for o in loadout_offers
         ],
     }
 

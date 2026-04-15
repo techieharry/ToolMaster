@@ -348,6 +348,49 @@ def cmd_delegate(args):
         sys.exit(1)
 
 
+def cmd_autopilot(args):
+    """V2: offer + delegate in one call. The autonomous verb."""
+    try:
+        result = _delegate.autopilot(
+            task=args.task,
+            model=args.model,
+            dry_run=args.dry_run,
+            min_relevance=args.min_relevance,
+        )
+
+        if result["status"] == "no_loadouts":
+            print(f"Error: {result['error']}", file=sys.stderr)
+            sys.exit(1)
+        if result["status"] == "no_match":
+            print(f"\n{result['message']}\n")
+            print(f"Best offer was: {result['best_offer']['name']} (relevance {result['best_offer']['relevance']})")
+            return
+        if result["status"] == "error":
+            print(f"Error: {result['error']}", file=sys.stderr)
+            sys.exit(1)
+
+        offer_info = result.get("offer", {})
+        print(f"\n{'='*64}")
+        print(f"  AUTOPILOT — offer engine picked: {offer_info.get('name', '?')}")
+        print(f"  relevance: {offer_info.get('relevance', '?')}  "
+              f"cold_start: {offer_info.get('cold_start', '?')}")
+        print(f"  reason: {offer_info.get('reason', '')[:80]}")
+        print(f"{'='*64}\n")
+
+        if result.get("status") == "dry_run":
+            print(f"[dry-run] Would delegate to '{offer_info.get('name')}' for ~${result['cost_est']['est_usd']}")
+            return
+
+        print(f"Model: {result.get('model')}")
+        print(f"Recording: {result.get('recording_id')}")
+        print()
+        print(result.get("result", ""))
+        print()
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_offer(args):
     """V2 offer engine — return 3 loadout offers for a task."""
     try:
@@ -577,6 +620,15 @@ def main():
     p_del.add_argument("--no-record", action="store_true", help="Skip writing a recording")
     p_del.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt")
 
+    # autopilot (V2 one-shot: offer + delegate)
+    p_auto = sub.add_parser("autopilot", help="V2: offer + delegate in one call (autonomous verb)")
+    p_auto.add_argument("task", help="Task description")
+    p_auto.add_argument("--model", help="Override model (default: TOOLMASTER_MODEL or haiku-4.5)")
+    p_auto.add_argument("--dry-run", action="store_true", help="Show cost estimate without calling")
+    p_auto.add_argument("--min-relevance", type=float, default=0.05,
+                        help="Min offer relevance to auto-delegate (default: 0.05)")
+    p_auto.add_argument("-y", "--yes", action="store_true", help="(reserved — autopilot is always non-interactive)")
+
     # suggest
     p_sug = sub.add_parser("suggest", help="Suggest skills for a task")
     p_sug.add_argument("task", nargs="?", help="Task description")
@@ -650,6 +702,7 @@ def main():
         "compare": cmd_compare,
         "offer": cmd_offer,
         "delegate": cmd_delegate,
+        "autopilot": cmd_autopilot,
         "suggest": cmd_suggest,
         "scout": cmd_scout,
         "checkin": cmd_checkin,

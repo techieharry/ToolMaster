@@ -223,6 +223,52 @@ def _call_openrouter(system: str, user: str, api_key: str, model: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def autopilot(task: str, model: str | None = None, dry_run: bool = False,
+              min_relevance: float = 0.05) -> dict:
+    """Offer + delegate in one call.
+
+    Runs the V2 offer engine on the task, picks the canonical result if its
+    relevance clears `min_relevance`, and delegates to it. Returns the same
+    shape as delegate() plus an `offer` field with the chosen offer.
+
+    Fails safe: if no loadout clears the threshold, returns status=no_match
+    with the best available offer attached so the caller can decide whether
+    to delegate anyway or fall back to inline work.
+    """
+    from .offer import suggest_loadouts
+
+    offers = suggest_loadouts(task, top_n=3)
+    if not offers:
+        return {
+            "status": "no_loadouts",
+            "error": "No loadouts in the store. Create one with 'toolmaster loadout create'.",
+        }
+
+    canonical = offers[0]
+    if canonical["relevance"] < min_relevance:
+        return {
+            "status": "no_match",
+            "best_offer": canonical,
+            "all_offers": offers,
+            "message": (
+                f"Best offer '{canonical['name']}' scored {canonical['relevance']:.2f}, "
+                f"below threshold {min_relevance}. Consider doing inline or passing "
+                f"--min-relevance 0 to force delegation."
+            ),
+        }
+
+    result = delegate(
+        task=task,
+        loadout_name=canonical["name"],
+        model=model,
+        dry_run=dry_run,
+        record=True,
+    )
+    result["offer"] = canonical
+    result["all_offers"] = offers
+    return result
+
+
 def _call_anthropic(system: str, user: str, api_key: str) -> str:
     body = json.dumps({
         "model": "claude-haiku-4-5-20251001",

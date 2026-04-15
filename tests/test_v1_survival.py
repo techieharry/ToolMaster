@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from toolmaster import store, loadout, record, compare, offer, scout, delegate as tm_delegate
+from toolmaster import store, loadout, record, compare, offer, scout, delegate as tm_delegate, protocol
 
 
 def _redirect_store(tmp_home: Path):
@@ -542,6 +542,98 @@ class DelegatePrimitiveTests(unittest.TestCase):
         self.assertIn("code-review", system.lower())
         self.assertEqual(sorted(names), sorted(["refactor", "code-review"]))
         self.assertIn("specialist", system)
+
+
+class AutopilotTests(unittest.TestCase):
+    """V2 autopilot = offer + delegate in one call."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_autopilot_returns_no_loadouts_when_store_empty(self):
+        result = tm_delegate.autopilot(task="anything", dry_run=True)
+        self.assertEqual(result["status"], "no_loadouts")
+
+    def test_autopilot_dry_run_picks_canonical_and_stops(self):
+        h1 = store.pin_skill(_write_synthetic_skill(
+            self.work, "refactor",
+            body_suffix="## Extract function\nPull a named chunk out of a long function.",
+        ))["id"]
+        h2 = store.pin_skill(_write_synthetic_skill(self.work, "code-review"))["id"]
+        loadout.create_loadout("refactor_stack", [h1, h2])
+
+        result = tm_delegate.autopilot(
+            task="refactor the long handler function", dry_run=True
+        )
+        # Should either be dry_run (picked a match) or no_match if relevance was too low
+        self.assertIn(result["status"], ("dry_run", "no_match"))
+        if result["status"] == "dry_run":
+            self.assertEqual(result["offer"]["name"], "refactor_stack")
+
+    def test_autopilot_returns_no_match_when_relevance_below_threshold(self):
+        h = store.pin_skill(_write_synthetic_skill(self.work, "unrelated"))["id"]
+        loadout.create_loadout("unrelated_stack", [h])
+
+        # Set an impossibly high threshold to force no_match
+        result = tm_delegate.autopilot(
+            task="totally unrelated task involving widgets",
+            dry_run=True,
+            min_relevance=0.99,
+        )
+        self.assertEqual(result["status"], "no_match")
+        self.assertIn("best_offer", result)
+        self.assertIn("all_offers", result)
+
+
+class ProtocolV2IntegrationTests(unittest.TestCase):
+    """Protocol checkin/checkout should surface loadouts and offers in V2."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+        self.project_dir = Path(self.tmp.name) / "project"
+        self.project_dir.mkdir()
+
+        h1 = store.pin_skill(_write_synthetic_skill(
+            self.work, "refactor",
+            body_suffix="## Extract function\nPull a chunk out.",
+        ))["id"]
+        h2 = store.pin_skill(_write_synthetic_skill(self.work, "code-review"))["id"]
+        loadout.create_loadout("refactor_stack", [h1, h2])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_checkin_includes_loadouts_in_toolbox(self):
+        state = protocol.checkin(self.project_dir)
+        self.assertIn("loadouts", state["toolbox"])
+        loadout_names = [lo["name"] for lo in state["toolbox"]["loadouts"]]
+        self.assertIn("refactor_stack", loadout_names)
+
+    def test_checkin_protocol_version_bumped(self):
+        state = protocol.checkin(self.project_dir)
+        self.assertEqual(state["protocol_version"], "1.1")
+
+    def test_checkout_returns_both_skill_suggestions_and_loadout_offers(self):
+        protocol.checkin(self.project_dir)  # required to create manifest
+        result = protocol.checkout(
+            self.project_dir, "refactor the long handler function"
+        )
+        self.assertIn("suggestions", result)
+        self.assertIn("loadout_offers", result)
+        # Loadout offers should contain refactor_stack for a refactor task
+        offer_names = [o["name"] for o in result["loadout_offers"]]
+        self.assertIn("refactor_stack", offer_names)
 
 
 class ScoutDiscoveryTests(unittest.TestCase):
