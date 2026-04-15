@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer
+from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate
 
 
 def cmd_pin(args):
@@ -296,6 +296,58 @@ def cmd_suggest(args):
         sys.exit(1)
 
 
+def cmd_delegate(args):
+    """Skill dispatch — delegate a task to a specialist agent with a pinned loadout."""
+    try:
+        est = _delegate.estimate_delegate_cost(args.loadout, args.task, args.model)
+        if "error" in est:
+            print(f"Error: {est['error']}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"\nDelegation preview")
+        print(f"  loadout:      {est['loadout']} ({est['skill_count']} skills)")
+        print(f"  model:        {est['model']}")
+        print(f"  est tokens:   {est['est_input_tokens']} in / {est['est_output_tokens']} out")
+        print(f"  est cost:     ~${est['est_usd']}")
+        task_preview = args.task[:80] + ("..." if len(args.task) > 80 else "")
+        print(f"  task:         {task_preview}")
+
+        if args.dry_run:
+            print("\n[dry-run] No API call made. Pass without --dry-run to execute.\n")
+            return
+
+        if not args.yes:
+            reply = input("\nProceed? [y/N]: ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        print("\nDelegating...\n")
+        result = _delegate.delegate(
+            task=args.task,
+            loadout_name=args.loadout,
+            model=args.model,
+            dry_run=False,
+            record=not args.no_record,
+        )
+
+        if result["status"] == "error":
+            print(f"Error: {result['error']}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"{'='*64}")
+        print(f"  RESULT (via {result['model']}, loadout={result['loadout']})")
+        print(f"{'='*64}\n")
+        print(result["result"])
+        print()
+        if result.get("recording_id"):
+            print(f"Recording: {result['recording_id']}")
+        print()
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_offer(args):
     """V2 offer engine — return 3 loadout offers for a task."""
     try:
@@ -516,6 +568,15 @@ def main():
     p_off.add_argument("task", help="Task description")
     p_off.add_argument("--top", type=int, default=3, help="Number of offers (default: 3)")
 
+    # delegate (V2 skill dispatch primitive)
+    p_del = sub.add_parser("delegate", help="Delegate a task to a specialist agent with a loadout")
+    p_del.add_argument("task", help="Task description for the specialist")
+    p_del.add_argument("--loadout", required=True, help="Loadout name to dispatch with")
+    p_del.add_argument("--model", help="Override model (default: TOOLMASTER_MODEL or haiku-4.5)")
+    p_del.add_argument("--dry-run", action="store_true", help="Show cost estimate without calling")
+    p_del.add_argument("--no-record", action="store_true", help="Skip writing a recording")
+    p_del.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt")
+
     # suggest
     p_sug = sub.add_parser("suggest", help="Suggest skills for a task")
     p_sug.add_argument("task", nargs="?", help="Task description")
@@ -588,6 +649,7 @@ def main():
         "recordings": cmd_record_list,
         "compare": cmd_compare,
         "offer": cmd_offer,
+        "delegate": cmd_delegate,
         "suggest": cmd_suggest,
         "scout": cmd_scout,
         "checkin": cmd_checkin,

@@ -9,6 +9,23 @@ ToolMaster is a content-addressed skill registry, loadout system, and replay-eva
 
 ## Session Log
 
+### 2026-04-14 — V2 skill dispatch primitive shipped
+- Added `toolmaster delegate <task> --loadout <name>` — calls a specialist agent (Haiku/Sonnet) with the loadout's skills loaded as the system prompt, captures output, writes a recording.
+- Deliberately NOT an orchestration framework: one call, one result, no subprocess management, no planning, no multi-agent teams. Reuses `compare.py`'s LLM patterns.
+- Cost estimate + confirmation gate baked in (`--dry-run`, `-y` to skip prompt).
+- Smoke-tested end-to-end: Haiku 4.5 via OpenRouter with `refactor + code-review` loaded, refactored nested conditionals into early returns + `all()` form, cited "pyramid of doom" vocabulary — real specialist-skill coherence.
+- 5 new tests (cost estimate, dry-run, no-API-key error, system prompt composition). Total 37/37 green.
+- Design scope: `delegate.py` is ~225 lines; positioned as "skill dispatch primitive" not "multi-agent workflow" to avoid the CrewAI/AutoGen lane entirely.
+
+### 2026-04-14 — Scout discovery expanded ~9×
+- `DEFAULT_WATCH_REPOS` 5 → 19 (all Tier 2+ validated via `gh search`)
+- Added GitHub Topics discovery (8 topics, 2/cycle rotation)
+- Added awesome-list mining (`_extract_repos_from_awesome_list()`, 6 lists, 1/cycle)
+- Added GitHub token auth (`_github_headers()` — 60→5000 req/hr)
+- Per-cycle numbers: 6→53 repos searched, 10→32 skills found
+- Real security findings: 1 REJECT (`competitive-ads-extractor` for ToS violation), 8 CAUTION (ComposioHQ MCP supply-chain + shell injection)
+- Full catalog: `docs/discovery-sources.md`
+
 ### 2026-04-14 — Reconciliation + V1 survival test — **THESIS PROVEN**
 - Discovered code is well ahead of `roadmap.md`: V1 Steps 1–4 (store, loadout, record, compare) are implemented in code but ticked as unchecked in the roadmap. Reconciled in place.
 - In addition to roadmap V1 scope, there is substantial protocol/scout/sync/watcher machinery — matches `ARCHITECTURE.md` but out of scope for V1 survival.

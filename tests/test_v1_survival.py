@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from toolmaster import store, loadout, record, compare, offer, scout
+from toolmaster import store, loadout, record, compare, offer, scout, delegate as tm_delegate
 
 
 def _redirect_store(tmp_home: Path):
@@ -462,6 +462,86 @@ class OfferEngineColdStartTests(unittest.TestCase):
             overlap = len(canon_skills & side_skills) / max(len(canon_skills), 1)
             self.assertLess(overlap, 0.5,
                 f"sideways overlap should be <50% but got {overlap:.0%}")
+
+
+class DelegatePrimitiveTests(unittest.TestCase):
+    """V2 skill-dispatch primitive — delegate() with cost est, dry run, recording."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        self.h_ref = store.pin_skill(_write_synthetic_skill(
+            self.work, "refactor",
+            body_suffix="## Extract function\nPull a named chunk out of a long function.",
+        ))["id"]
+        self.h_cr = store.pin_skill(_write_synthetic_skill(
+            self.work, "code-review",
+            body_suffix="## Review\nCheck clarity and safety before merging.",
+        ))["id"]
+        loadout.create_loadout("specialist", [self.h_ref, self.h_cr])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_estimate_cost_uses_loadout_skills(self):
+        est = tm_delegate.estimate_delegate_cost(
+            "specialist", "refactor the thing", model="anthropic/claude-haiku-4.5"
+        )
+        self.assertNotIn("error", est)
+        self.assertEqual(est["loadout"], "specialist")
+        self.assertEqual(est["skill_count"], 2)
+        # Cost estimate should be > 0 because skills contribute real token bytes
+        self.assertGreater(est["est_input_tokens"], tm_delegate.BASE_SYSTEM_TOKENS)
+        self.assertGreater(est["est_usd"], 0)
+
+    def test_estimate_cost_errors_on_unknown_loadout(self):
+        est = tm_delegate.estimate_delegate_cost("does-not-exist", "task")
+        self.assertIn("error", est)
+
+    def test_dry_run_never_calls_api(self):
+        # No API key set, but dry-run should still succeed because it short-circuits
+        import os as _os
+        original_or = _os.environ.pop("OPENROUTER_API_KEY", None)
+        original_a = _os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            result = tm_delegate.delegate(
+                task="refactor the handler", loadout_name="specialist", dry_run=True
+            )
+            self.assertEqual(result["status"], "dry_run")
+            self.assertIsNone(result["result"])
+            self.assertIn("cost_est", result)
+        finally:
+            if original_or:
+                _os.environ["OPENROUTER_API_KEY"] = original_or
+            if original_a:
+                _os.environ["ANTHROPIC_API_KEY"] = original_a
+
+    def test_delegate_errors_without_api_key(self):
+        import os as _os
+        original_or = _os.environ.pop("OPENROUTER_API_KEY", None)
+        original_a = _os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            result = tm_delegate.delegate(
+                task="refactor", loadout_name="specialist", dry_run=False
+            )
+            self.assertEqual(result["status"], "error")
+            self.assertIn("API key", result["error"])
+        finally:
+            if original_or:
+                _os.environ["OPENROUTER_API_KEY"] = original_or
+            if original_a:
+                _os.environ["ANTHROPIC_API_KEY"] = original_a
+
+    def test_system_prompt_contains_all_skill_contents(self):
+        system, names = tm_delegate._build_system_prompt("specialist")
+        self.assertIn("refactor", system.lower())
+        self.assertIn("code-review", system.lower())
+        self.assertEqual(sorted(names), sorted(["refactor", "code-review"]))
+        self.assertIn("specialist", system)
 
 
 class ScoutDiscoveryTests(unittest.TestCase):
