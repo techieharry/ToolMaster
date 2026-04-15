@@ -771,7 +771,7 @@ def _distribute_proposals(proposals: list[dict]):
         existing = []
         if proposals_file.exists():
             try:
-                existing = json.loads(proposals_file.read_text())
+                existing = json.loads(proposals_file.read_text(encoding="utf-8", errors="replace"))
             except json.JSONDecodeError:
                 existing = []
 
@@ -972,7 +972,7 @@ def _extract_desc_from_content(content: str) -> str:
 
 def _load_state() -> dict:
     if SCOUT_STATE_FILE.exists():
-        return json.loads(SCOUT_STATE_FILE.read_text())
+        return json.loads(SCOUT_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
     return {"known_repos": [], "last_cycle": None, "total_cycles": 0}
 
 

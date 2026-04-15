@@ -78,7 +78,7 @@ def get_recording(recording_id: str) -> dict:
     rec_path = RECORDINGS_DIR / f"{recording_id}.json"
     if not rec_path.exists():
         raise FileNotFoundError(f"Recording not found: {recording_id}")
-    return json.loads(rec_path.read_text())
+    return json.loads(rec_path.read_text(encoding="utf-8", errors="replace"))
 
 
 def list_recordings(loadout: str = None) -> list[dict]:
@@ -86,7 +86,7 @@ def list_recordings(loadout: str = None) -> list[dict]:
     ensure_dirs()
     recordings = []
     for rf in sorted(RECORDINGS_DIR.glob("*.json")):
-        rec = json.loads(rf.read_text())
+        rec = json.loads(rf.read_text(encoding="utf-8", errors="replace"))
         if loadout and rec.get("loadout") != loadout:
             continue
         recordings.append(rec)

@@ -33,7 +33,7 @@ def validate_skill(skill_path: str | Path, strict: bool = False) -> dict:
     if not skill_md.exists():
         return _report(path, issues, strict)
 
-    content = skill_md.read_text()
+    content = skill_md.read_text(encoding="utf-8", errors="replace")
 
     # Frontmatter
     frontmatter, body, parse_errors = _parse_frontmatter(content)
@@ -245,7 +245,7 @@ def _validate_scripts(path: Path) -> list[str]:
         return issues
 
     for script in scripts_dir.glob("*.py"):
-        content = script.read_text()
+        content = script.read_text(encoding="utf-8", errors="replace")
         if '"""' not in content and "'''" not in content:
             issues.append(f"LOW: Script {script.name} missing docstring")
 

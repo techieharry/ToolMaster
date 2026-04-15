@@ -40,7 +40,7 @@ def get_loadout(name: str) -> dict:
     loadout_path = LOADOUTS_DIR / f"{name}.json"
     if not loadout_path.exists():
         raise FileNotFoundError(f"Loadout not found: {name}")
-    return json.loads(loadout_path.read_text())
+    return json.loads(loadout_path.read_text(encoding="utf-8", errors="replace"))
 
 
 def list_loadouts() -> list[dict]:
@@ -48,7 +48,7 @@ def list_loadouts() -> list[dict]:
     ensure_dirs()
     loadouts = []
     for lf in sorted(LOADOUTS_DIR.glob("*.json")):
-        loadout = json.loads(lf.read_text())
+        loadout = json.loads(lf.read_text(encoding="utf-8", errors="replace"))
         loadouts.append({
             "name": loadout["name"],
             "created_at": loadout["created_at"],

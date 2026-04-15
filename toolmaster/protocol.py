@@ -287,7 +287,7 @@ def _load_manifest(project_dir: Path) -> dict:
     manifest_path = project_dir / "data" / "toolmaster_session.json"
     if not manifest_path.exists():
         return checkin(project_dir)
-    return json.loads(manifest_path.read_text())
+    return json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _save_manifest(project_dir: Path, manifest: dict):
@@ -300,7 +300,7 @@ def _load_proposals(project_dir: Path) -> list:
     """Load watcher proposals for this project."""
     proposals_file = project_dir / "data" / "toolmaster_proposals.json"
     if proposals_file.exists():
-        return json.loads(proposals_file.read_text())
+        return json.loads(proposals_file.read_text(encoding="utf-8", errors="replace"))
     return []
 
 
@@ -308,7 +308,7 @@ def _record_lineage(new_hash: str, parent_hash: str, name: str, changes: str):
     """Record skill lineage in the global store."""
     lineage_file = TOOLMASTER_HOME / "lineage.json"
     if lineage_file.exists():
-        lineage = json.loads(lineage_file.read_text())
+        lineage = json.loads(lineage_file.read_text(encoding="utf-8", errors="replace"))
     else:
         lineage = {}
 

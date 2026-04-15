@@ -27,7 +27,7 @@ def _load_state() -> dict:
     """Load processed log tracking state."""
     ensure_dirs()
     if GLOBAL_STATE_FILE.exists():
-        return json.loads(GLOBAL_STATE_FILE.read_text())
+        return json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
     return {"processed": {}}
 
 
@@ -97,13 +97,13 @@ def scan_logs(projects: list[dict], state: dict) -> list[dict]:
             if log_id in processed_for_project:
                 continue
             try:
-                log_data = json.loads(log_file.read_text())
+                log_data = json.loads(log_file.read_text(encoding="utf-8", errors="replace"))
                 log_data["_project"] = proj["name"]
                 log_data["_log_id"] = log_id
                 log_data["_file"] = str(log_file)
                 new_logs.append(log_data)
-            except json.JSONDecodeError:
-                print(f"  [WARN] Malformed: {log_file}")
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                print(f"  [WARN] Malformed: {log_file} ({type(e).__name__})")
 
     return new_logs
 
@@ -199,7 +199,7 @@ def update_global_insights(results: list[dict]):
     ensure_dirs()
 
     if GLOBAL_INSIGHTS_FILE.exists():
-        insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text())
+        insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text(encoding="utf-8", errors="replace"))
     else:
         insights = {
             "total_runs": 0,
@@ -384,7 +384,7 @@ def poll_loop(interval: int = 60):
                       f"rating={r['rating']}/5 loadout={sig.get('loadout', '?')}")
 
             # Print action items if any
-            insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text()) if GLOBAL_INSIGHTS_FILE.exists() else {}
+            insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text(encoding="utf-8", errors="replace")) if GLOBAL_INSIGHTS_FILE.exists() else {}
             for item in insights.get("action_items", []):
                 print(f"  ⚡ {item}")
 
@@ -428,7 +428,7 @@ def main():
 
     if args.status:
         if GLOBAL_INSIGHTS_FILE.exists():
-            insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text())
+            insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text(encoding="utf-8", errors="replace"))
             print(f"Total runs: {insights['total_runs']}")
             print(f"\nProject health:")
             for proj, health in insights.get("project_health", {}).items():

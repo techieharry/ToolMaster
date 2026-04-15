@@ -76,7 +76,7 @@ def _cache_read(key: str) -> dict | None:
     path = COMPARE_CACHE_DIR / f"{key}.json"
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8", errors="replace"))
         except json.JSONDecodeError:
             return None
     return None

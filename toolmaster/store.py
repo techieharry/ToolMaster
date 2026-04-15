@@ -133,7 +133,7 @@ def resolve_skill(manifest_hash: str, target_dir: str | Path) -> Path:
         else:
             raise FileNotFoundError(f"Manifest not found: {manifest_hash}")
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
     target_dir = Path(target_dir) / manifest["name"]
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -151,7 +151,7 @@ def list_skills() -> list[dict]:
     ensure_dirs()
     skills = []
     for mf in sorted(MANIFESTS_DIR.glob("*.json")):
-        manifest = json.loads(mf.read_text())
+        manifest = json.loads(mf.read_text(encoding="utf-8", errors="replace"))
         skills.append({
             "id": manifest["id"],
             "short_id": manifest["id"][:12],
@@ -174,12 +174,12 @@ def get_manifest(manifest_hash: str) -> dict:
             raise ValueError(f"Ambiguous hash prefix '{manifest_hash}'")
         else:
             raise FileNotFoundError(f"Manifest not found: {manifest_hash}")
-    return json.loads(manifest_path.read_text())
+    return json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
 
 
 def _parse_skill_name(skill_md: Path) -> str:
     """Parse skill name from SKILL.md YAML frontmatter."""
-    content = skill_md.read_text()
+    content = skill_md.read_text(encoding="utf-8", errors="replace")
     lines = content.split("\n")
 
     in_frontmatter = False

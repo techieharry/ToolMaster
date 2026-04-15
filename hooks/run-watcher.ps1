@@ -23,7 +23,7 @@ $LogFile = Join-Path $StateDir "watcher.log"
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 
-function Load-DotEnv {
+function Import-DotEnv {
     $envFile = Join-Path $RepoDir ".env"
     if (Test-Path $envFile) {
         Get-Content $envFile | ForEach-Object {
@@ -55,7 +55,7 @@ function Start-Watcher {
         return
     }
 
-    Load-DotEnv
+    Import-DotEnv
     if (-not $env:CLAUDE_DIR) { $env:CLAUDE_DIR = "C:/Claude" }
 
     if (-not $env:OPENROUTER_API_KEY) {
@@ -69,8 +69,11 @@ function Start-Watcher {
         $pythonw = (Get-Command python.exe).Source -replace 'python\.exe$', 'pythonw.exe'
     }
 
+    # -u forces unbuffered stdout/stderr so logs flush in real time
+    # (pythonw aggressively buffers by default, making the watcher look silent)
+    $env:PYTHONUNBUFFERED = "1"
     $proc = Start-Process -FilePath $pythonw `
-        -ArgumentList "-m", "toolmaster", "watch", "--interval", "30" `
+        -ArgumentList "-u", "-m", "toolmaster", "watch", "--interval", "30" `
         -WorkingDirectory $RepoDir `
         -RedirectStandardOutput $LogFile `
         -RedirectStandardError "$LogFile.err" `

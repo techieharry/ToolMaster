@@ -8,6 +8,7 @@ The watcher reads logs. The sync engine writes back:
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 from datetime import datetime, timezone
@@ -16,8 +17,12 @@ from .store import list_skills, pin_skill, TOOLMASTER_HOME
 from .suggest import get_proven_skills, _build_performance_index
 from .record import list_recordings
 
-CLAUDE_DIR = Path.home() / "Documents" / "claude"
-TOOLMASTER_DIR = CLAUDE_DIR / "ToolMaster"
+# CLAUDE_DIR is the root of the user's projects tree.
+# Matches global_watcher.py / scout.py convention: env override with C:/Claude default.
+CLAUDE_DIR = Path(os.environ.get("CLAUDE_DIR", "C:/Claude"))
+# TOOLMASTER_DIR is the repo itself — self-locate from this file's path so it
+# works regardless of where the user cloned it.
+TOOLMASTER_DIR = Path(__file__).resolve().parent.parent
 PROMPT_SOURCE = TOOLMASTER_DIR / "TOOLMASTER_AGENT_PROMPT.md"
 GLOBAL_INSIGHTS_FILE = TOOLMASTER_HOME / "global_insights.json"
 
@@ -66,7 +71,7 @@ def harvest_skills(projects: list[dict]) -> list[dict]:
     # Track what we've already harvested to avoid re-pinning unchanged skills
     harvest_state_file = TOOLMASTER_HOME / "harvest_state.json"
     if harvest_state_file.exists():
-        harvest_state = json.loads(harvest_state_file.read_text())
+        harvest_state = json.loads(harvest_state_file.read_text(encoding="utf-8", errors="replace"))
     else:
         harvest_state = {}  # {skill_dir_path: last_mtime}
 
@@ -180,7 +185,7 @@ def _build_toolbox_digest() -> dict:
     # Load global insights
     insights = {}
     if GLOBAL_INSIGHTS_FILE.exists():
-        insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text())
+        insights = json.loads(GLOBAL_INSIGHTS_FILE.read_text(encoding="utf-8", errors="replace"))
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -300,7 +305,7 @@ def _enforce_in_claude_md(proj_path: Path):
     if not claude_md.exists():
         return
 
-    content = claude_md.read_text()
+    content = claude_md.read_text(encoding="utf-8", errors="replace")
     project_name = proj_path.name
     loadout_name = PROJECT_LOADOUT_MAP.get(project_name, "dev-universal")
 
@@ -314,7 +319,7 @@ def _enforce_in_claude_md(proj_path: Path):
     else:
         content = content.rstrip() + "\n\n" + block
 
-    claude_md.write_text(content)
+    claude_md.write_text(content, encoding="utf-8")
 
 
 def _enforcement_block(project_name: str = "", loadout_name: str = "dev-universal") -> str:
