@@ -319,14 +319,24 @@ h1 {{ font-size: 18px; color: #f0f6fc; margin-bottom: 4px; }}
     width: 10px; height: 10px; border-radius: 2px;
 }}
 
+/* Graph labels */
+.node-label {{
+    font-size: 10px; fill: #8b949e;
+    text-anchor: middle; pointer-events: none;
+    text-shadow: 0 0 4px #0d1117, 0 0 4px #0d1117, 0 0 8px #0d1117;
+}}
+.node-label.project {{ font-size: 11px; font-weight: 600; fill: #c9d1d9; }}
+.node-label.hidden {{ display: none; }}
+
 /* Tooltip */
 .tooltip {{
-    position: absolute; pointer-events: none;
+    position: fixed; pointer-events: none;
     background: #1c2128; border: 1px solid #30363d;
     border-radius: 6px; padding: 10px 14px;
     font-size: 12px; line-height: 1.5;
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     z-index: 100; display: none;
+    max-width: 320px;
 }}
 .tooltip-name {{ font-weight: 600; color: #f0f6fc; font-size: 14px; }}
 .tooltip-meta {{ color: #8b949e; }}
@@ -421,132 +431,216 @@ h1 {{ font-size: 18px; color: #f0f6fc; margin-bottom: 4px; }}
 <script>
 const nodes = {nodes_json};
 const links = {links_json};
-const proposals = {proposals_json};
-const loadouts = {loadouts_json};
 
-// Ensure all link endpoints exist
+// Pre-filter broken links (endpoints not in node set)
 const nodeIds = new Set(nodes.map(n => n.id));
 const validLinks = links.filter(l => nodeIds.has(l.source) && nodeIds.has(l.target));
 
-// Color scale
+// Build adjacency index for hover-highlight
+const adjacency = new Map();
+nodes.forEach(n => adjacency.set(n.id, new Set()));
+validLinks.forEach(l => {{
+    adjacency.get(l.source).add(l.target);
+    adjacency.get(l.target).add(l.source);
+}});
+
+// --- Visual encoding functions ---
+
 function nodeColor(d) {{
     if (d.type === 'project') return '#58a6ff';
-    if (d.avg_edit === null || d.avg_edit === undefined) return '#8b949e';
+    if (d.avg_edit === null || d.avg_edit === undefined) return '#484f58';
     if (d.avg_edit <= 20) return '#3fb950';
     if (d.avg_edit <= 50) return '#d29922';
     return '#f85149';
 }}
 
 function nodeRadius(d) {{
-    if (d.type === 'project') return 18;
-    const base = 8;
+    if (d.type === 'project') return 22;
+    const base = 7;
     const runs = d.runs || 0;
-    return Math.min(base + Math.sqrt(runs) * 4, 28);
+    return Math.min(base + Math.sqrt(runs) * 3.5, 24);
 }}
 
-// SVG setup
-const svg = d3.select('svg');
+function truncName(name, max) {{
+    return name.length > max ? name.slice(0, max - 1) + '\u2026' : name;
+}}
+
+// Should this node show a permanent label? (projects always, skills only if notable)
+function showLabel(d) {{
+    if (d.type === 'project') return true;
+    if (d.runs >= 2) return true;       // used multiple times
+    if (d.type === 'skill') return true; // pinned skills always labeled
+    return false;                        // tracked-only with 0-1 runs: hidden until hover
+}}
+
+// --- SVG setup ---
+
+const graphEl = document.getElementById('graph');
+const svg = d3.select('#graph svg');
 const container = svg.append('g');
-const width = window.innerWidth - 340;
-const height = window.innerHeight;
+const width = graphEl.clientWidth;
+const height = graphEl.clientHeight;
 
-// Zoom
-svg.call(d3.zoom()
-    .scaleExtent([0.2, 4])
-    .on('zoom', (e) => container.attr('transform', e.transform))
-);
+// Zoom + pan
+const zoom = d3.zoom()
+    .scaleExtent([0.15, 5])
+    .on('zoom', (e) => container.attr('transform', e.transform));
+svg.call(zoom);
 
-// Force simulation
+// --- Force simulation (tuned for 30-50 nodes with labels) ---
+
 const simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(validLinks).id(d => d.id).distance(80))
-    .force('charge', d3.forceManyBody().strength(-200))
+    .force('link', d3.forceLink(validLinks).id(d => d.id).distance(140).strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-380))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 4))
-    .force('x', d3.forceX(width / 2).strength(0.05))
-    .force('y', d3.forceY(height / 2).strength(0.05));
+    .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 28).strength(0.7))
+    .force('x', d3.forceX(width / 2).strength(0.06))
+    .force('y', d3.forceY(height / 2).strength(0.06));
 
-// Links
-const link = container.append('g')
+// --- Draw links ---
+
+const link = container.append('g').attr('class', 'links')
     .selectAll('line')
     .data(validLinks)
     .join('line')
     .attr('stroke', '#30363d')
     .attr('stroke-width', 1.5)
-    .attr('stroke-opacity', 0.6);
+    .attr('stroke-opacity', 0.5);
 
-// Nodes
-const node = container.append('g')
+// --- Draw nodes ---
+
+const node = container.append('g').attr('class', 'nodes')
     .selectAll('g')
     .data(nodes)
     .join('g')
+    .style('cursor', 'pointer')
     .call(d3.drag()
         .on('start', dragStart)
         .on('drag', dragging)
         .on('end', dragEnd)
     );
 
-// Project nodes = rounded rects, skill nodes = circles
-node.each(function(d) {{
-    const el = d3.select(this);
-    if (d.type === 'project') {{
-        el.append('rect')
-            .attr('width', 36).attr('height', 24)
-            .attr('x', -18).attr('y', -12)
-            .attr('rx', 4).attr('ry', 4)
-            .attr('fill', nodeColor)
-            .attr('stroke', '#30363d').attr('stroke-width', 1.5);
-    }} else {{
-        el.append('circle')
-            .attr('r', nodeRadius)
-            .attr('fill', nodeColor)
-            .attr('stroke', d.type === 'skill' ? '#30363d' : 'none')
-            .attr('stroke-width', 1.5)
-            .attr('stroke-dasharray', d.type === 'tracked' ? '3,3' : 'none');
-    }}
-}});
+// Project nodes = rounded rects
+node.filter(d => d.type === 'project').append('rect')
+    .attr('width', 44).attr('height', 28)
+    .attr('x', -22).attr('y', -14)
+    .attr('rx', 6).attr('ry', 6)
+    .attr('fill', nodeColor)
+    .attr('stroke', '#1f6feb').attr('stroke-width', 2);
 
-// Labels
-node.append('text')
-    .text(d => d.name)
-    .attr('font-size', d => d.type === 'project' ? 11 : 10)
-    .attr('fill', '#8b949e')
-    .attr('text-anchor', 'middle')
-    .attr('dy', d => d.type === 'project' ? 24 : nodeRadius(d) + 14);
+// Skill nodes = circles (pinned = solid border, tracked = dashed border)
+node.filter(d => d.type !== 'project').append('circle')
+    .attr('r', nodeRadius)
+    .attr('fill', nodeColor)
+    .attr('stroke', d => d.type === 'skill' ? '#30363d' : '#30363d')
+    .attr('stroke-width', 1.5)
+    .attr('stroke-dasharray', d => d.type === 'tracked' ? '4,3' : 'none');
 
-// Tooltip
+// --- Labels (with text-shadow for readability) ---
+
+const labels = node.append('text')
+    .text(d => truncName(d.name, 18))
+    .attr('class', d => {{
+        let cls = 'node-label';
+        if (d.type === 'project') cls += ' project';
+        if (!showLabel(d)) cls += ' hidden';
+        return cls;
+    }})
+    .attr('dy', d => d.type === 'project' ? 26 : nodeRadius(d) + 16);
+
+// --- Tooltip (viewport-clamped) ---
+
 const tooltip = d3.select('#tooltip');
-node.on('mouseover', (e, d) => {{
+
+node.on('mouseover', function(e, d) {{
+    // Build tooltip content
     let html = `<div class="tooltip-name">${{d.name}}</div>`;
     if (d.type === 'project') {{
-        html += `<div class="tooltip-meta">Project &middot; ${{d.runs || 0}} runs`;
+        html += `<div class="tooltip-meta">Project</div>`;
+        html += `<div class="tooltip-meta">${{d.runs || 0}} runs`;
         if (d.avg_edit != null) html += ` &middot; ${{d.avg_edit}}% avg edit`;
-        if (d.avg_rating != null) html += ` &middot; ${{d.avg_rating}}/5`;
+        if (d.avg_rating != null) html += ` &middot; Rating: ${{d.avg_rating}}/5`;
         html += `</div>`;
     }} else {{
-        const status = d.type === 'skill' ? 'Pinned' : 'Tracked (not pinned)';
-        html += `<div class="tooltip-meta">${{status}}`;
-        if (d.hash) html += ` &middot; ${{d.hash}}`;
-        html += `</div>`;
+        const status = d.type === 'skill' ? 'Pinned in store' : 'Tracked (not yet pinned)';
+        html += `<div class="tooltip-meta">${{status}}</div>`;
+        if (d.hash) html += `<div class="tooltip-meta">Hash: ${{d.hash}}</div>`;
         html += `<div class="tooltip-meta">${{d.runs || 0}} runs`;
-        if (d.avg_edit != null) html += ` &middot; ${{d.avg_edit}}% edit`;
+        if (d.avg_edit != null) html += ` &middot; ${{d.avg_edit}}% edit distance`;
         if (d.rejections) html += ` &middot; ${{d.rejections}} rejections`;
         html += `</div>`;
+        if (d.avg_edit != null) {{
+            const health = d.avg_edit <= 20 ? 'Healthy' : d.avg_edit <= 50 ? 'Moderate' : 'Weak - needs improvement';
+            html += `<div class="tooltip-meta">Health: ${{health}}</div>`;
+        }}
     }}
     tooltip.html(html).style('display', 'block');
-}}).on('mousemove', (e) => {{
-    tooltip.style('left', (e.pageX + 12) + 'px').style('top', (e.pageY - 20) + 'px');
-}}).on('mouseout', () => {{
+
+    // Highlight this node + neighbors, dim everything else
+    const neighbors = adjacency.get(d.id) || new Set();
+    node.style('opacity', n => (n.id === d.id || neighbors.has(n.id)) ? 1 : 0.15);
+    link.style('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.8 : 0.05)
+        .style('stroke-width', l => (l.source.id === d.id || l.target.id === d.id) ? 2.5 : 1);
+    labels.classed('hidden', n => {{
+        if (n.id === d.id || neighbors.has(n.id)) return false;
+        return true;
+    }});
+    // Show label for hovered node even if normally hidden
+    d3.select(this).select('text').classed('hidden', false);
+
+}}).on('mousemove', function(e) {{
+    // Clamp tooltip to viewport
+    const tt = tooltip.node();
+    const tw = tt.offsetWidth || 200;
+    const th = tt.offsetHeight || 100;
+    let left = e.clientX + 14;
+    let top = e.clientY - 10;
+    if (left + tw > window.innerWidth - 10) left = e.clientX - tw - 14;
+    if (top + th > window.innerHeight - 10) top = window.innerHeight - th - 10;
+    if (top < 10) top = 10;
+    tooltip.style('left', left + 'px').style('top', top + 'px');
+
+}}).on('mouseout', function() {{
     tooltip.style('display', 'none');
+    // Restore all opacities
+    node.style('opacity', 1);
+    link.style('stroke-opacity', 0.5).style('stroke-width', 1.5);
+    labels.classed('hidden', d => !showLabel(d));
 }});
 
-// Tick
+// --- Tick ---
+
 simulation.on('tick', () => {{
     link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
     node.attr('transform', d => `translate(${{d.x}},${{d.y}})`);
 }});
 
-// Drag
+// --- Zoom to fit after simulation settles ---
+
+simulation.on('end', () => {{
+    // Compute bounding box of all nodes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodes.forEach(n => {{
+        const r = nodeRadius(n) + 30;
+        if (n.x - r < minX) minX = n.x - r;
+        if (n.y - r < minY) minY = n.y - r;
+        if (n.x + r > maxX) maxX = n.x + r;
+        if (n.y + r > maxY) maxY = n.y + r;
+    }});
+    const bw = maxX - minX;
+    const bh = maxY - minY;
+    const scale = Math.min(width / bw, height / bh) * 0.85;
+    const tx = width / 2 - (minX + bw / 2) * scale;
+    const ty = height / 2 - (minY + bh / 2) * scale;
+    svg.transition().duration(750).call(
+        zoom.transform,
+        d3.zoomIdentity.translate(tx, ty).scale(scale)
+    );
+}});
+
+// --- Drag handlers ---
+
 function dragStart(e, d) {{
     if (!e.active) simulation.alphaTarget(0.3).restart();
     d.fx = d.x; d.fy = d.y;
