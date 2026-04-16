@@ -48,6 +48,9 @@ scout.log
 *.sqlite-shm
 *.sqlite-wal
 
+# Generated viz output (regenerate with: toolmaster viz)
+toolmaster-viz.html
+
 # Test scratch
 .coverage
 htmlcov/

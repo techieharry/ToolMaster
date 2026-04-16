@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate
+from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate, viz
 
 
 def cmd_pin(args):
@@ -348,6 +348,20 @@ def cmd_delegate(args):
         sys.exit(1)
 
 
+def cmd_viz(args):
+    """Generate interactive HTML visualization of the skill portfolio."""
+    try:
+        out = viz.generate_viz(output_path=args.output)
+        print(f"Visualization generated: {out.resolve()}")
+        print(f"Open in browser: file:///{out.resolve().as_posix()}")
+        if not args.no_open:
+            import webbrowser
+            webbrowser.open(str(out.resolve()))
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_autopilot(args):
     """V2: offer + delegate in one call. The autonomous verb."""
     try:
@@ -606,6 +620,11 @@ def main():
     p_cmp.add_argument("--no-cache", action="store_true", help="Skip cache, force re-judge")
     p_cmp.add_argument("--no-cost-preview", action="store_true", help="Suppress pre-run cost estimate")
 
+    # viz
+    p_viz = sub.add_parser("viz", help="Generate interactive HTML skill portfolio visualization")
+    p_viz.add_argument("-o", "--output", default="toolmaster-viz.html", help="Output path (default: toolmaster-viz.html)")
+    p_viz.add_argument("--no-open", action="store_true", help="Don't auto-open in browser")
+
     # offer (V2)
     p_off = sub.add_parser("offer", help="V2: return 3 loadout offers for a task")
     p_off.add_argument("task", help="Task description")
@@ -700,6 +719,7 @@ def main():
         "record": cmd_record,
         "recordings": cmd_record_list,
         "compare": cmd_compare,
+        "viz": cmd_viz,
         "offer": cmd_offer,
         "delegate": cmd_delegate,
         "autopilot": cmd_autopilot,

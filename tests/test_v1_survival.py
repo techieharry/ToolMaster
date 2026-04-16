@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from toolmaster import store, loadout, record, compare, offer, scout, delegate as tm_delegate, protocol
+from toolmaster import store, loadout, record, compare, offer, scout, delegate as tm_delegate, protocol, viz as tm_viz
 
 
 def _redirect_store(tmp_home: Path):
@@ -41,6 +41,7 @@ def _redirect_store(tmp_home: Path):
     compare.COMPARE_CACHE_DIR = tmp_home / "compare_cache"
     offer.TOOLMASTER_HOME = tmp_home
     offer.OFFER_CACHE_DIR = tmp_home / "offer_cache"
+    tm_viz.TOOLMASTER_HOME = tmp_home
 
 
 def _write_synthetic_skill(parent: Path, name: str, body_suffix: str = "") -> Path:
@@ -634,6 +635,52 @@ class ProtocolV2IntegrationTests(unittest.TestCase):
         # Loadout offers should contain refactor_stack for a refactor task
         offer_names = [o["name"] for o in result["loadout_offers"]]
         self.assertIn("refactor_stack", offer_names)
+
+
+class VizGenerationTests(unittest.TestCase):
+    """viz.py generates a valid self-contained HTML file from store data."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_home = Path(self.tmp.name) / ".toolmaster"
+        _redirect_store(self.tmp_home)
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+        # Pin a few skills so the viz has data
+        store.pin_skill(_write_synthetic_skill(
+            self.work, "refactor",
+            body_suffix="## Extract function\nPull a named chunk.",
+        ))
+        store.pin_skill(_write_synthetic_skill(self.work, "bug-fix"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_generates_valid_html(self):
+        out_path = Path(self.tmp.name) / "test-viz.html"
+        result = tm_viz.generate_viz(output_path=str(out_path))
+        self.assertTrue(result.exists())
+        html = result.read_text(encoding="utf-8")
+        self.assertIn("<!DOCTYPE html>", html)
+        self.assertIn("d3js.org/d3.v7.min.js", html)
+        self.assertIn("forceSimulation", html)
+
+    def test_contains_pinned_skill_nodes(self):
+        out_path = Path(self.tmp.name) / "test-viz.html"
+        tm_viz.generate_viz(output_path=str(out_path))
+        html = out_path.read_text(encoding="utf-8")
+        self.assertIn("refactor", html)
+        self.assertIn("bug-fix", html)
+
+    def test_generates_without_crash_on_empty_store(self):
+        empty_home = Path(self.tmp.name) / ".toolmaster-empty"
+        _redirect_store(empty_home)
+        out_path = Path(self.tmp.name) / "empty-viz.html"
+        result = tm_viz.generate_viz(output_path=str(out_path))
+        self.assertTrue(result.exists())
+        html = result.read_text(encoding="utf-8")
+        self.assertIn("<!DOCTYPE html>", html)
 
 
 class ScoutDiscoveryTests(unittest.TestCase):
