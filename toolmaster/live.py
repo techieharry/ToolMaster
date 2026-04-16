@@ -458,9 +458,81 @@ body {
 .tooltip .tooltip-name { font-weight: 600; color: #f0f6fc; font-size: 14px; }
 .tooltip .tooltip-meta { color: #8b949e; margin-top: 2px; }
 
+/* Overview layout */
+.overview-steps {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px; margin: 24px 0;
+}
+.step-card {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 16px;
+}
+.step-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.step-body { color: #8b949e; font-size: 12px; line-height: 1.5; }
+.flywheel-box {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 16px; margin-bottom: 24px; overflow-x: auto;
+}
+.nav-buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+.nav-btn {
+    cursor: pointer; background: #21262d; border: 1px solid #30363d;
+    border-radius: 6px; padding: 10px 16px; font-size: 13px;
+    transition: background 0.15s;
+}
+.nav-btn:hover { background: #30363d; }
+
+/* Graph touch support */
+#graph-svg { touch-action: none; }
+
 .empty-state {
     text-align: center; color: #484f58; padding: 40px;
     font-size: 14px;
+}
+
+/* Skills table wrapper for mobile scroll */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* --- MOBILE RESPONSIVE --- */
+@media (max-width: 900px) {
+    .overview-steps { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+    .topbar { padding: 8px 12px; height: 44px; }
+    .topbar h1 { font-size: 14px; }
+    .topbar .status { font-size: 10px; }
+
+    .tabs {
+        overflow-x: auto; -webkit-overflow-scrolling: touch;
+        scrollbar-width: none; -ms-overflow-style: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { white-space: nowrap; padding: 10px 14px; font-size: 12px; }
+
+    .tab-content { padding: 12px; height: calc(100vh - 85px); }
+
+    .stats-row { gap: 8px; }
+    .stat-card { min-width: 90px; padding: 10px; }
+    .stat-card .value { font-size: 20px; }
+    .stat-card .label { font-size: 10px; }
+
+    .overview-steps { grid-template-columns: 1fr; gap: 10px; }
+
+    .feed-entry { flex-direction: column; gap: 2px; padding: 6px 8px; }
+    .feed-ts { min-width: auto; }
+
+    .proposal-card { padding: 10px 12px; }
+    .proposal-card .title { font-size: 13px; }
+
+    .skills-table th, .skills-table td { padding: 6px 8px; font-size: 12px; }
+
+    .node-label { font-size: 8px; }
+    .node-label.project { font-size: 10px; }
+}
+
+@media (max-width: 480px) {
+    .stats-row { grid-template-columns: 1fr 1fr; display: grid; }
+    .nav-buttons { flex-direction: column; }
+    .nav-btn { text-align: center; }
 }
 </style>
 </head>
@@ -496,33 +568,33 @@ body {
 
         <div class="stats-row" id="overview-stats"></div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin:24px 0;">
-            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
-                <div style="color:#58a6ff; font-weight:600; font-size:13px; margin-bottom:8px;">1. Pin &amp; Compose</div>
-                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+        <div class="overview-steps">
+            <div class="step-card">
+                <div class="step-title" style="color:#58a6ff;">1. Pin &amp; Compose</div>
+                <div class="step-body">
                     Skills are hashed by SHA-256 and stored immutably. Bundle them into named
                     <em>loadouts</em> &mdash; priority-ordered stacks that resolve conflicts by rank.
                 </div>
             </div>
-            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
-                <div style="color:#3fb950; font-weight:600; font-size:13px; margin-bottom:8px;">2. Evaluate &amp; Rank</div>
-                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+            <div class="step-card">
+                <div class="step-title" style="color:#3fb950;">2. Evaluate &amp; Rank</div>
+                <div class="step-body">
                     LLM judge compares loadout A vs B on real recorded tasks with blind A/B randomization.
                     V1 survival test: <strong style="color:#f0f6fc;">8/10 correct attribution</strong>.
                 </div>
             </div>
-            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
-                <div style="color:#d29922; font-weight:600; font-size:13px; margin-bottom:8px;">3. Scout &amp; Dispatch</div>
-                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+            <div class="step-card">
+                <div class="step-title" style="color:#d29922;">3. Scout &amp; Dispatch</div>
+                <div class="step-body">
                     Autonomous GitHub scout audits external skills for safety.
                     <em>Delegate</em> dispatches tasks to specialist agents with pinned loadouts at 10-50x lower cost.
                 </div>
             </div>
         </div>
 
-        <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:24px;">
+        <div class="flywheel-box">
             <div style="color:#8b949e; font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px;">The Flywheel</div>
-            <pre style="color:#c9d1d9; font-size:12px; line-height:1.6; font-family:'Cascadia Code','Fira Code',monospace; overflow-x:auto;">
+            <pre style="color:#c9d1d9; font-size:12px; line-height:1.6; font-family:'Cascadia Code','Fira Code',monospace;">
   Agents build skills in projects
          |
          v
@@ -542,19 +614,11 @@ body {
             </pre>
         </div>
 
-        <div style="display:flex; gap:12px; flex-wrap:wrap;">
-            <div onclick="switchTab('graph')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#58a6ff;">
-                View Graph &rarr;
-            </div>
-            <div onclick="switchTab('research')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#3fb950;">
-                Live Research &rarr;
-            </div>
-            <div onclick="switchTab('proposals')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#d29922;">
-                Scout Proposals &rarr;
-            </div>
-            <div onclick="switchTab('skills')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#f85149;">
-                Skill Health &rarr;
-            </div>
+        <div class="nav-buttons">
+            <div class="nav-btn" style="color:#58a6ff;" onclick="switchTab('graph')">View Graph &rarr;</div>
+            <div class="nav-btn" style="color:#3fb950;" onclick="switchTab('research')">Live Research &rarr;</div>
+            <div class="nav-btn" style="color:#d29922;" onclick="switchTab('proposals')">Scout Proposals &rarr;</div>
+            <div class="nav-btn" style="color:#f85149;" onclick="switchTab('skills')">Skill Health &rarr;</div>
         </div>
     </div>
 </div>
@@ -602,12 +666,12 @@ body {
 <div id="tab-skills" class="tab-content">
     <div class="feed-title">Skill Health Overview</div>
     <div class="health-bar" id="skill-health-bar"></div>
-    <table class="skills-table" id="skills-table">
+    <div class="table-wrap"><table class="skills-table" id="skills-table">
         <thead>
             <tr><th>Skill</th><th>Status</th><th>Runs</th><th>Edit Distance</th><th>Rejections</th><th>Health</th></tr>
         </thead>
         <tbody id="skills-tbody"></tbody>
-    </table>
+    </table></div>
 </div>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -840,9 +904,16 @@ function buildGraph(state) {
         .selectAll('g').data(nodes).join('g')
         .style('cursor', 'pointer')
         .call(d3.drag()
-            .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-            .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
-            .on('end', (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+            .on('start', function(e, d) {
+                e.sourceEvent.stopPropagation();
+                if (!e.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x; d.fy = d.y;
+            })
+            .on('drag', function(e, d) { d.fx = e.x; d.fy = e.y; })
+            .on('end', function(e, d) {
+                if (!e.active) simulation.alphaTarget(0);
+                d.fx = null; d.fy = null;
+            })
         );
 
     // Project rects
