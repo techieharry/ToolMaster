@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate, viz, live
+from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate, viz, live, armory
 
 
 def cmd_pin(args):
@@ -625,6 +625,11 @@ def main():
     p_viz.add_argument("-o", "--output", default="toolmaster-viz.html", help="Output path (default: toolmaster-viz.html)")
     p_viz.add_argument("--no-open", action="store_true", help="Don't auto-open in browser")
 
+    # armory (RPG TUI)
+    p_arm = sub.add_parser("armory", help="RPG-themed terminal inventory (live-updating, zero deps)")
+    p_arm.add_argument("--once", action="store_true", help="Render once and exit")
+    p_arm.add_argument("--interval", type=int, default=5, help="Refresh interval seconds (default: 5)")
+
     # live
     p_live = sub.add_parser("live", help="Start live dashboard server (Research + Proposals + Skills tabs)")
     p_live.add_argument("--port", type=int, default=8484, help="Server port (default: 8484)")
@@ -724,6 +729,7 @@ def main():
         "record": cmd_record,
         "recordings": cmd_record_list,
         "compare": cmd_compare,
+        "armory": lambda args: armory.run_armory(once=args.once, interval=args.interval),
         "viz": cmd_viz,
         "live": lambda args: live.start_server(port=args.port, open_browser=not args.no_open),
         "offer": cmd_offer,
