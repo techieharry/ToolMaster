@@ -314,145 +314,143 @@ def collect_state() -> dict:
     }
 
 
-def render(state: dict, width: int = 70) -> str:
-    """Render the full armory frame as a string."""
-    w = max(width, 50)
-    iw = w - 4  # inner width (inside border)
-    lines = []
+def render(state: dict, width: int = 76) -> str:
+    """Render a lean, aesthetic armory frame."""
+    W = max(min(width, 80), 56)  # clamp 56-80
+    IW = W - 4  # usable inner width
 
-    def border_top():
-        lines.append(f"{C.YELLOW}{'╔' + '═' * (w - 2) + '╗'}{C.RESET}")
+    out: list[str] = []
+    Y = C.YELLOW  # border color
+    R = C.RESET
 
-    def border_bot():
-        lines.append(f"{C.YELLOW}{'╚' + '═' * (w - 2) + '╝'}{C.RESET}")
+    def top():
+        out.append(f"{Y}\u2554{'═' * (W - 2)}\u2557{R}")
 
-    def border_mid():
-        lines.append(f"{C.YELLOW}{'╠' + '═' * (w - 2) + '╣'}{C.RESET}")
+    def bot():
+        out.append(f"{Y}\u255a{'═' * (W - 2)}\u255d{R}")
 
-    def row(content: str = "", pad: int = 0):
-        # Strip ANSI for length calc
-        visible = re.sub(r"\033\[[0-9;]*m", "", content)
-        padding = max(0, iw - len(visible) - pad)
-        lines.append(f"{C.YELLOW}║{C.RESET} {content}{' ' * padding} {C.YELLOW}║{C.RESET}")
+    def sep(label: str = ""):
+        if label:
+            pad = W - 6 - len(label)
+            out.append(f"{Y}\u2560\u2550\u2550 {C.BOLD}{C.CYAN}{label}{R}{Y} {'═' * max(pad, 1)}\u2563{R}")
+        else:
+            out.append(f"{Y}\u2560{'═' * (W - 2)}\u2563{R}")
 
-    def section_header(title: str):
-        visible_len = len(title)
-        dashes = iw - visible_len - 4
-        left = 1
-        right = max(0, dashes - left)
-        lines.append(
-            f"{C.YELLOW}║{C.RESET} {C.DIM}{'─' * left}{C.RESET} "
-            f"{C.BOLD}{C.CYAN}{title}{C.RESET} "
-            f"{C.DIM}{'─' * right}{C.RESET} {C.YELLOW}║{C.RESET}"
-        )
+    def row(text: str = ""):
+        vis = re.sub(r"\033\[[0-9;]*m", "", text)
+        pad = IW - len(vis)
+        out.append(f"{Y}\u2551{R} {text}{' ' * max(pad, 0)} {Y}\u2551{R}")
 
-    # === HEADER ===
-    border_top()
-    title = f"{C.BOLD}{C.B_YELLOW}  \u2694  T O O L M A S T E R   A R M O R Y  \u2694{C.RESET}"
-    cycle_str = f"{C.GRAY}Cycle: {state['scout']['total_cycles']}{C.RESET}"
-    row(f"{title}      {cycle_str}")
-    border_mid()
-
-    # === STATS BAR ===
-    n_skills = len(state["skills"])
-    n_pinned = sum(1 for s in state["skills"] if s["type"] == "pinned")
-    n_projects = len(state["projects"])
-    pid_str = f"{C.B_GREEN}\u25cf{C.RESET}" if state["watcher_pid"] else f"{C.B_RED}\u25cf{C.RESET}"
-    stats = (
-        f"{pid_str} Familiar  "
-        f"{C.B_WHITE}{n_skills}{C.RESET} items  "
-        f"{C.B_WHITE}{n_pinned}{C.RESET} pinned  "
-        f"{C.B_WHITE}{n_projects}{C.RESET} realms  "
-        f"{C.B_WHITE}{state['scout']['audited']}{C.RESET} scouted  "
-        f"{C.B_WHITE}{state['scout']['repos']}{C.RESET} lairs"
-    )
-    row(stats)
-    row()
-
-    # === INVENTORY ===
-    section_header(f"INVENTORY ({n_skills} items)")
-    row()
-
-    for s in state["skills"][:15]:
-        icon = get_icon(s["name"])
-        name = s["name"][:20].ljust(20)
-        bar = health_bar(s["avg_edit"], 10)
-        edit_str = f"{s['avg_edit']:>4.0f}%" if s["avg_edit"] is not None else "  -  "
-        runs_str = f"{s['runs']}x" if s["runs"] else "  "
-        rar_label, rar_color, _ = rarity(s["avg_edit"])
-        rar_str = f"{rar_color}{rar_label:<9}{C.RESET}"
-        pin = f"{C.B_WHITE}\u25c6{C.RESET}" if s["type"] == "pinned" else f"{C.GRAY}\u25c7{C.RESET}"
-
-        row(f"  {pin} {icon} {C.B_WHITE}{name}{C.RESET} {bar} {edit_str}  {runs_str:>3}  {rar_str}")
-
-    if len(state["skills"]) > 15:
-        row(f"  {C.GRAY}... and {len(state['skills']) - 15} more items{C.RESET}")
-    row()
-
-    # === SCOUT'S LORE ===
-    section_header("SCOUT'S LORE")
-    row()
-
-    lore_entries = state["scout_log"][:5]
-    if lore_entries:
-        for entry in lore_entries:
-            lore_text = format_lore(entry["msg"])
-            # Word-wrap lore to fit
-            words = lore_text.split()
-            line_buf = f"  {C.DIM}\"{C.RESET}{C.GRAY}"
-            visible_len = 3  # quote + space
-            for word in words:
-                if visible_len + len(word) + 1 > iw - 4:
-                    line_buf += f"{C.RESET}"
-                    row(line_buf)
-                    line_buf = f"   {C.GRAY}"
-                    visible_len = 3
-                line_buf += (" " if visible_len > 3 else "") + word
-                visible_len += len(word) + 1
-            line_buf += f"\"{C.RESET}"
-            row(line_buf)
-            row()
-    else:
-        row(f"  {C.DIM}The Scout has not yet ventured forth...{C.RESET}")
+    def blank():
         row()
 
-    # === PROPOSALS (LOOT DROPS) ===
-    section_header(f"LOOT DROPS ({len(state['proposals'])} proposals)")
-    row()
+    # Count stats
+    n_total = len(state["skills"])
+    n_pinned = sum(1 for s in state["skills"] if s["type"] == "pinned")
+    n_projs = len(state["projects"])
+    familiar_ok = bool(state["watcher_pid"])
 
-    for p in state["proposals"][:5]:
+    # ── HEADER ──
+    top()
+    blank()
+    title = f"{C.BOLD}{C.B_YELLOW}\u2694  TOOLMASTER ARMORY{R}"
+    fam = f"{C.B_GREEN}\u25cf{R}" if familiar_ok else f"{C.B_RED}\u25cb{R}"
+    row(f"   {title}                       {fam} {C.GRAY}Cycle {state['scout']['total_cycles']}{R}")
+    blank()
+    row(
+        f"   {C.B_WHITE}{n_total}{R}{C.GRAY} items{R}   "
+        f"{C.B_WHITE}{n_pinned}{R}{C.GRAY} pinned{R}   "
+        f"{C.B_WHITE}{state['scout']['audited']}{R}{C.GRAY} scouted{R}   "
+        f"{C.B_WHITE}{n_projs}{R}{C.GRAY} realms{R}"
+    )
+    blank()
+
+    # ── INVENTORY ──
+    sep("INVENTORY")
+    blank()
+
+    shown = state["skills"][:8]
+    for s in shown:
+        icon = get_icon(s["name"])
+        pin = f"{C.B_WHITE}\u25c6{R}" if s["type"] == "pinned" else f"{C.GRAY}\u25c7{R}"
+        name = s["name"][:18].ljust(18)
+        bar = health_bar(s["avg_edit"], 10)
+        edit_s = f"{s['avg_edit']:>3.0f}%" if s["avg_edit"] is not None else "  - "
+        runs_s = f"{s['runs']:>2}x" if s["runs"] else "   "
+        rl, rc, _ = rarity(s["avg_edit"])
+        rar = f"{rc}{rl:<9}{R}"
+        row(f"   {pin} {icon} {C.B_WHITE}{name}{R}  {bar} {edit_s} {runs_s}  {rar}")
+
+    rest = n_total - len(shown)
+    if rest > 0:
+        row(f"   {C.GRAY}+{rest} more{R}")
+    blank()
+
+    # ── LORE ──
+    sep("SCOUT'S LORE")
+    blank()
+
+    lore_items = state["scout_log"][:3]
+    if lore_items:
+        for entry in lore_items:
+            lore = format_lore(entry["msg"])
+            _wrap_lore(lore, IW - 6, row)
+            blank()
+    else:
+        row(f"   {C.DIM}The Scout has not yet ventured forth...{R}")
+        blank()
+
+    # ── LOOT ──
+    n_props = len(state["proposals"])
+    sep(f"LOOT DROPS ({n_props})")
+    blank()
+
+    for p in state["proposals"][:3]:
         safety = p.get("safety", "unknown")
         if safety == "safe":
-            icon = f"{C.B_GREEN}\u2705{C.RESET}"
-            tag = f"{C.B_GREEN}SAFE{C.RESET}"
+            si, st = f"{C.B_GREEN}\u2713{R}", f"{C.B_GREEN}SAFE{R}"
         elif safety == "caution":
-            icon = f"{C.B_YELLOW}\u26a0\ufe0f{C.RESET}"
-            tag = f"{C.B_YELLOW}CURSED{C.RESET}"
+            si, st = f"{C.B_YELLOW}!{R}", f"{C.B_YELLOW}CURSED{R}"
         else:
-            icon = f"{C.B_RED}\u274c{C.RESET}"
-            tag = f"{C.B_RED}REJECT{C.RESET}"
-
-        title = p.get("title", "")[:40]
-        ptype = p.get("type", "")
-        type_str = f"{C.B_BLUE}import{C.RESET}" if ptype == "import" else f"{C.MAGENTA}{ptype}{C.RESET}"
-        row(f"  {icon} {C.B_WHITE}{title}{C.RESET}")
-        row(f"     {type_str}  {tag}  {C.GRAY}{p.get('source_repo', '')}{C.RESET}")
+            si, st = f"{C.B_RED}x{R}", f"{C.B_RED}REJECT{R}"
+        title_text = p.get("title", "")[:36].ljust(36)
+        repo = p.get("source_repo", "")[:20]
+        row(f"   {si} {C.B_WHITE}{title_text}{R}  {st}  {C.GRAY}{repo}{R}")
 
     if not state["proposals"]:
-        row(f"  {C.DIM}No loot has been discovered yet.{C.RESET}")
-    row()
+        row(f"   {C.DIM}No loot discovered yet.{R}")
+    blank()
 
-    # === FOOTER ===
-    border_mid()
-    familiar = "patrolling" if state["watcher_pid"] else "resting"
-    row(
-        f"  \U0001f43e Familiar (PID {state['watcher_pid'] or '???'}) {familiar}...  "
-        f"{state['scout']['audited']} lairs searched  "
-        f"{state['total_runs']} quests completed"
-    )
-    border_bot()
+    # ── FOOTER ──
+    sep()
+    pid_s = state["watcher_pid"] or "---"
+    fam_s = "patrolling" if familiar_ok else "resting"
+    row(f"   \U0001f43e {C.GRAY}Familiar ({pid_s}) {fam_s}{R}     "
+        f"{C.GRAY}{state['scout']['audited']} lairs   {state['total_runs']} quests{R}")
+    bot()
 
-    return "\n".join(lines)
+    return "\n".join(out)
+
+
+def _wrap_lore(text: str, max_w: int, row_fn):
+    """Word-wrap a lore string into bordered rows."""
+    words = text.split()
+    buf = ""
+    cur_len = 0
+    first = True
+    for word in words:
+        if cur_len + len(word) + 1 > max_w:
+            prefix = f'   {C.DIM}"{C.RESET}' if first else f"    "
+            row_fn(f"{prefix}{C.GRAY}{buf}{C.RESET}")
+            buf = ""
+            cur_len = 0
+            first = False
+        buf += (" " if buf else "") + word
+        cur_len += len(word) + 1
+    if buf:
+        prefix = f'   {C.DIM}"{C.RESET}' if first else f"    "
+        suffix = f'{C.DIM}"{C.RESET}'
+        row_fn(f"{prefix}{C.GRAY}{buf}{suffix}")
 
 
 def clear_screen():
