@@ -475,14 +475,92 @@ body {
 </div>
 
 <div class="tabs">
-    <div class="tab active" onclick="switchTab('graph')">Graph</div>
+    <div class="tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="tab" onclick="switchTab('graph')">Graph</div>
     <div class="tab" onclick="switchTab('research')">Research</div>
     <div class="tab" onclick="switchTab('proposals')">Proposals</div>
     <div class="tab" onclick="switchTab('skills')">Skills</div>
 </div>
 
+<!-- OVERVIEW TAB -->
+<div id="tab-overview" class="tab-content active">
+    <div style="max-width:900px; margin:0 auto;">
+        <div style="margin-bottom:24px;">
+            <h2 style="font-size:22px; color:#f0f6fc; margin-bottom:6px;">ToolMaster</h2>
+            <p style="color:#8b949e; font-size:14px; line-height:1.6;">
+                Content-addressed skill registry for AI coding agents with LLM-judged loadout evaluation.
+                Pins every skill version by SHA-256, bundles them into priority-ordered <em>loadouts</em>,
+                and uses an LLM as a blind A/B judge to rank which loadouts actually work on your historical tasks.
+            </p>
+        </div>
+
+        <div class="stats-row" id="overview-stats"></div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin:24px 0;">
+            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
+                <div style="color:#58a6ff; font-weight:600; font-size:13px; margin-bottom:8px;">1. Pin &amp; Compose</div>
+                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+                    Skills are hashed by SHA-256 and stored immutably. Bundle them into named
+                    <em>loadouts</em> &mdash; priority-ordered stacks that resolve conflicts by rank.
+                </div>
+            </div>
+            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
+                <div style="color:#3fb950; font-weight:600; font-size:13px; margin-bottom:8px;">2. Evaluate &amp; Rank</div>
+                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+                    LLM judge compares loadout A vs B on real recorded tasks with blind A/B randomization.
+                    V1 survival test: <strong style="color:#f0f6fc;">8/10 correct attribution</strong>.
+                </div>
+            </div>
+            <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px;">
+                <div style="color:#d29922; font-weight:600; font-size:13px; margin-bottom:8px;">3. Scout &amp; Dispatch</div>
+                <div style="color:#8b949e; font-size:12px; line-height:1.5;">
+                    Autonomous GitHub scout audits external skills for safety.
+                    <em>Delegate</em> dispatches tasks to specialist agents with pinned loadouts at 10-50x lower cost.
+                </div>
+            </div>
+        </div>
+
+        <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:24px;">
+            <div style="color:#8b949e; font-weight:600; font-size:13px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px;">The Flywheel</div>
+            <pre style="color:#c9d1d9; font-size:12px; line-height:1.6; font-family:'Cascadia Code','Fira Code',monospace; overflow-x:auto;">
+  Agents build skills in projects
+         |
+         v
+  Watcher harvests + pins to global store (&rarr; <span id="ov-skills-count">0</span> skills)
+         |
+         v
+  Scout audits GitHub repos for new candidates (&rarr; <span id="ov-audited-count">0</span> audited)
+         |
+         v
+  Offer engine ranks loadouts per task (canonical / iterated / sideways)
+         |
+         v
+  Delegate dispatches to specialist agent &rarr; recording written
+         |
+         v
+  Outcome data feeds future rankings &rarr; flywheel compounds
+            </pre>
+        </div>
+
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+            <div onclick="switchTab('graph')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#58a6ff;">
+                View Graph &rarr;
+            </div>
+            <div onclick="switchTab('research')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#3fb950;">
+                Live Research &rarr;
+            </div>
+            <div onclick="switchTab('proposals')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#d29922;">
+                Scout Proposals &rarr;
+            </div>
+            <div onclick="switchTab('skills')" style="cursor:pointer; background:#21262d; border:1px solid #30363d; border-radius:6px; padding:10px 16px; font-size:13px; color:#f85149;">
+                Skill Health &rarr;
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- GRAPH TAB -->
-<div id="tab-graph" class="tab-content active" style="padding:0; height:calc(100vh - 95px); position:relative; overflow:hidden;">
+<div id="tab-graph" class="tab-content" style="padding:0; height:calc(100vh - 95px); position:relative; overflow:hidden;">
     <div id="graph-tooltip" class="tooltip"></div>
     <svg id="graph-svg" style="width:100%; height:100%;"></svg>
     <div style="position:absolute; bottom:12px; left:12px; font-size:11px; color:#484f58;">
@@ -861,6 +939,18 @@ async function poll() {
         document.getElementById('status-text').textContent =
             `Watcher PID: ${pid || 'not running'} | Last update: ${state.timestamp}`;
         document.getElementById('status-dot').style.color = pid ? '#3fb950' : '#f85149';
+
+        // Overview tab stats
+        document.getElementById('overview-stats').innerHTML = `
+            <div class="stat-card"><div class="value">${state.skills.length}</div><div class="label">Skills in Portfolio</div></div>
+            <div class="stat-card"><div class="value">${Object.keys(state.projects).length}</div><div class="label">Projects Monitored</div></div>
+            <div class="stat-card"><div class="value">${state.scout_summary.audited_skills}</div><div class="label">External Skills Audited</div></div>
+            <div class="stat-card"><div class="value">${state.proposals.length}</div><div class="label">Import Proposals</div></div>
+            <div class="stat-card"><div class="value">${state.scout_summary.known_repos}</div><div class="label">Repos Discovered</div></div>
+            <div class="stat-card"><div class="value">${state.total_runs}</div><div class="label">Total Agent Runs</div></div>
+        `;
+        document.getElementById('ov-skills-count').textContent = state.skills.length;
+        document.getElementById('ov-audited-count').textContent = state.scout_summary.audited_skills;
 
         buildGraph(state);
         renderStats(state);
