@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate, viz
+from . import store, loadout, record, compare, suggest, protocol, scout, quality, offer, delegate as _delegate, viz, live
 
 
 def cmd_pin(args):
@@ -625,6 +625,11 @@ def main():
     p_viz.add_argument("-o", "--output", default="toolmaster-viz.html", help="Output path (default: toolmaster-viz.html)")
     p_viz.add_argument("--no-open", action="store_true", help="Don't auto-open in browser")
 
+    # live
+    p_live = sub.add_parser("live", help="Start live dashboard server (Research + Proposals + Skills tabs)")
+    p_live.add_argument("--port", type=int, default=8484, help="Server port (default: 8484)")
+    p_live.add_argument("--no-open", action="store_true", help="Don't auto-open in browser")
+
     # offer (V2)
     p_off = sub.add_parser("offer", help="V2: return 3 loadout offers for a task")
     p_off.add_argument("task", help="Task description")
@@ -720,6 +725,7 @@ def main():
         "recordings": cmd_record_list,
         "compare": cmd_compare,
         "viz": cmd_viz,
+        "live": lambda args: live.start_server(port=args.port, open_browser=not args.no_open),
         "offer": cmd_offer,
         "delegate": cmd_delegate,
         "autopilot": cmd_autopilot,
