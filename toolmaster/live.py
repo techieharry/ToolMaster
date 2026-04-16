@@ -434,6 +434,30 @@ body {
 .skills-table tr:hover td { background: #161b22; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
 
+/* Graph node labels */
+.node-label {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 10px; fill: #8b949e;
+    text-anchor: middle; pointer-events: none;
+    paint-order: stroke;
+    stroke: #0d1117; stroke-width: 3px; stroke-linejoin: round;
+}
+.node-label.project { font-size: 12px; font-weight: 600; fill: #e6edf3; }
+.node-label.hidden { display: none; }
+
+/* Graph tooltip */
+.tooltip {
+    position: fixed; pointer-events: none;
+    background: #1c2128; border: 1px solid #30363d;
+    border-radius: 6px; padding: 10px 14px;
+    font-size: 12px; line-height: 1.5;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    z-index: 1000; display: none;
+    max-width: 320px;
+}
+.tooltip .tooltip-name { font-weight: 600; color: #f0f6fc; font-size: 14px; }
+.tooltip .tooltip-meta { color: #8b949e; margin-top: 2px; }
+
 .empty-state {
     text-align: center; color: #484f58; padding: 40px;
     font-size: 14px;
@@ -458,7 +482,7 @@ body {
 </div>
 
 <!-- GRAPH TAB -->
-<div id="tab-graph" class="tab-content active" style="padding:0; height:calc(100vh - 95px); position:relative;">
+<div id="tab-graph" class="tab-content active" style="padding:0; height:calc(100vh - 95px); position:relative; overflow:hidden;">
     <div id="graph-tooltip" class="tooltip"></div>
     <svg id="graph-svg" style="width:100%; height:100%;"></svg>
     <div style="position:absolute; bottom:12px; left:12px; font-size:11px; color:#484f58;">
@@ -719,14 +743,14 @@ function buildGraph(state) {
         return false;
     }
 
-    // Simulation
+    // Simulation — tuned for 30-50 nodes in a tabbed panel
     const simulation = d3.forceSimulation(nodes)
-        .force('link', d3.forceLink(validLinks).id(d => d.id).distance(140).strength(0.4))
-        .force('charge', d3.forceManyBody().strength(-350))
+        .force('link', d3.forceLink(validLinks).id(d => d.id).distance(160).strength(0.3))
+        .force('charge', d3.forceManyBody().strength(-500))
         .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 28).strength(0.7))
-        .force('x', d3.forceX(width / 2).strength(0.06))
-        .force('y', d3.forceY(height / 2).strength(0.06));
+        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 35).strength(0.8))
+        .force('x', d3.forceX(width / 2).strength(0.04))
+        .force('y', d3.forceY(height / 2).strength(0.04));
 
     // Draw links
     const link = container.append('g')
